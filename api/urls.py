@@ -40,7 +40,8 @@ urlpatterns = [
 
     # === Webhook Midtrans ===
     path('webhook/midtrans/', views.midtrans_webhook, name='midtrans_webhook'),
-
+    path('midtrans-webhook/', views.midtrans_webhook, name='midtrans-webhook'),
+    
     # === Dashboard Admin ===
     path('admin/all-orders/', views.admin_get_all_orders, name='admin_all_orders'),
     path('admin/dashboard-stats/', views.get_dashboard_stats, name='admin_dashboard_stats'),
