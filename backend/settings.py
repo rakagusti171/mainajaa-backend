@@ -100,6 +100,7 @@ if not DEBUG:
         'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME'),
         'API_KEY': os.environ.get('CLOUDINARY_API_KEY'),
         'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET'),
+        'SECURE': True,
     }
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -144,4 +145,5 @@ if not DEBUG:
     X_FRAME_OPTIONS = 'DENY'
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
     SECURE_HSTS_PRELOAD = True
