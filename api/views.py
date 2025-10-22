@@ -18,6 +18,13 @@ from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.contrib.auth import password_validation
 from django.core.mail import send_mail
+import midtransclient
+import hashlib
+snap = midtransclient.Snap(
+    is_production=settings.MIDTRANS_IS_PRODUCTION,
+    server_key=settings.MIDTRANS_SERVER_KEY,
+    client_key=settings.MIDTRANS_CLIENT_KEY
+)
 from .models import (
     Kupon, AkunGaming, TopUpProduct, Pembelian, TopUpPembelian, 
     AkunGamingImage, 
@@ -51,8 +58,13 @@ def encrypt_data(data):
         return f.encrypt(data.encode()).decode()
     except Exception as e:
         print(f"Encryption Error: {e}")
-        return None # Kembalikan None jika gagal
-# --- SELESAI PENAMBAHAN ---
+        return None 
+    
+def _buat_signature_key(order_id, status_code, gross_amount):
+    """Membuat signature key untuk verifikasi webhook Midtrans"""
+    server_key = settings.MIDTRANS_SERVER_KEY
+    string_to_hash = f"{order_id}{status_code}{gross_amount}{server_key}"
+    return hashlib.sha512(string_to_hash.encode()).hexdigest()
 # ===================================================================
 # AUTENTIKASI & USER VIEWS
 # ===================================================================
@@ -584,6 +596,88 @@ Tim MainAjaa
         print(f"Error processing Midtrans webhook: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def midtrans_webhook(request):
+    """
+    Endpoint untuk menerima notifikasi webhook dari Midtrans.
+    Ini akan menangani AKUN dan TOPUP.
+    """
+    try:
+        data = request.data
+        order_id = data.get('order_id')
+        status_code = data.get('status_code')
+        gross_amount = data.get('gross_amount')
+        signature_key = data.get('signature_key')
+        transaction_status = data.get('transaction_status')
+
+        # 1. Verifikasi Signature Key (Keamanan)
+        expected_signature = _buat_signature_key(order_id, status_code, gross_amount)
+        if signature_key != expected_signature:
+            print(f"WEBHOOK GAGAL: Signature key tidak valid untuk order {order_id}")
+            return Response({'status': 'error', 'message': 'Invalid signature'}, status=400)
+
+        # 2. Tentukan model berdasarkan prefix order_id
+        pembelian = None
+        model_type = None
+
+        if order_id.startswith('AKUN-'):
+            try:
+                # Menggunakan model 'Pembelian' Anda
+                pembelian = Pembelian.objects.get(kode_transaksi=order_id)
+                model_type = 'AKUN'
+            except Pembelian.DoesNotExist:
+                pass  # Biarkan error 404 di bawah
+        
+        elif order_id.startswith('TOPUP-'): # Asumsi prefix ini
+            try:
+                # Menggunakan model 'TopUpPembelian' Anda
+                pembelian = TopUpPembelian.objects.get(kode_transaksi=order_id)
+                model_type = 'TOPUP'
+            except TopUpPembelian.DoesNotExist:
+                pass  # Biarkan error 404 di bawah
+
+        # 3. Handle jika order tidak ditemukan
+        if not pembelian:
+            print(f"WEBHOOK GAGAL: Order {order_id} tidak ditemukan di model manapun.")
+            return Response({'status': 'error', 'message': 'Order not found'}, status=404)
+
+        # 4. Update status di database
+        if transaction_status == 'capture' or transaction_status == 'settlement':
+            if pembelian.status != 'COMPLETED':
+                pembelian.status = 'COMPLETED'
+                pembelian.save()
+
+                # Jika ini pembelian AKUN, tandai akun sebagai terjual
+                if model_type == 'AKUN':
+                    try:
+                        akun = pembelian.akun
+                        akun.is_sold = True
+                        akun.save()
+                        print(f"WEBHOOK SUKSES: Akun {akun.id} ditandai terjual.")
+                    except Exception as e:
+                        print(f"WEBHOOK ERROR: Gagal menandai akun terjual untuk {order_id}: {e}")
+                try:
+                    print(f"WEBHOOK SUKSES: Email konfirmasi untuk {order_id} akan dikirim (jika diaktifkan).")
+                except Exception as e:
+                    print(f"WEBHOOK SUKSES: Gagal kirim email, tapi status diupdate. Error: {e}")
+            
+            print(f"WEBHOOK SUKSES: Status untuk {order_id} sudah COMPLETED.")
+
+        elif transaction_status == 'cancel' or transaction_status == 'expire' or transaction_status == 'deny':
+            if pembelian.status != 'CANCELLED':
+                pembelian.status = 'CANCELLED'
+                pembelian.save()
+            print(f"WEBHOOK SUKSES: Status untuk {order_id} diupdate ke CANCELLED.")
+
+        # Kirim balasan 200 OK ke Midtrans
+        return Response({'status': 'ok'}, status=200)
+
+    except Exception as e:
+        print(f"WEBHOOK CRASH: Terjadi error: {e}")
+        return Response({'status': 'error', 'message': str(e)}, status=500)
+
 # ===================================================================
 # ADMIN DASHBOARD VIEWS
 # ===================================================================
@@ -1097,3 +1191,4 @@ def submit_review(request, purchase_id):
 
     except Exception as e:
         return Response({'error': f'Gagal menyimpan ulasan: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
