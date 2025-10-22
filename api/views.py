@@ -244,18 +244,6 @@ def get_purchase_detail(request, kode_transaksi):
     except Exception as e:
         print(f"Error get_purchase_detail: {e}")
         return Response({'error': 'Terjadi kesalahan internal.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def get_purchase_detail(request, purchase_id):
-    purchase = get_object_or_404(Pembelian, pk=purchase_id, pembeli=request.user)
-    if purchase.status != 'COMPLETED':
-        return Response({'error': 'Pembelian belum lunas'}, status=status.HTTP_403_FORBIDDEN)
-    serializer = PembelianSerializer(purchase)
-    data = serializer.data
-    data['akun_email_decrypted'] = decrypt_data(purchase.akun.akun_email)
-    data['akun_password_decrypted'] = decrypt_data(purchase.akun.akun_password)
-    return Response(data)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -1192,3 +1180,4 @@ def submit_review(request, purchase_id):
     except Exception as e:
         return Response({'error': f'Gagal menyimpan ulasan: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
+
