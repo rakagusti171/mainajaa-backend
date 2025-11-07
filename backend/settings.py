@@ -12,7 +12,32 @@ SECRET_KEY = os.environ.get('SECRET_KEY')
 DEBUG = os.environ.get('DEBUG', 'False').lower() in ('true', '1', 't')
 
 # Update untuk production
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+# Baca ALLOWED_HOSTS dari environment variable, split by comma dan strip whitespace
+ALLOWED_HOSTS_STR = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1')
+ALLOWED_HOSTS = [host.strip() for host in ALLOWED_HOSTS_STR.split(',') if host.strip()]
+
+# Tambahkan backend domain jika ada
+BACKEND_DOMAIN = os.environ.get('BACKEND_DOMAIN', '')
+if BACKEND_DOMAIN:
+    # Extract domain dari URL (remove https:// and trailing slash)
+    domain = BACKEND_DOMAIN.replace('https://', '').replace('http://', '').rstrip('/')
+    # Tambahkan domain dan juga tanpa port jika ada
+    if ':' in domain:
+        domain_without_port = domain.split(':')[0]
+        if domain_without_port not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(domain_without_port)
+    if domain not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(domain)
+
+# Tambahkan Railway domain jika ada
+RAILWAY_DOMAIN = os.environ.get('RAILWAY_PUBLIC_DOMAIN', '')
+if RAILWAY_DOMAIN:
+    if RAILWAY_DOMAIN not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(RAILWAY_DOMAIN)
+    
+# Untuk development, allow all jika DEBUG=True
+if DEBUG:
+    ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -36,7 +61,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',  # FIX: Tambah comma
-    'corsheaders.middleware.CorsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',  # CORS middleware harus di atas CommonMiddleware
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -44,6 +69,9 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# Disable APPEND_SLASH untuk menghindari 301 redirect yang menyebabkan CORS issue
+APPEND_SLASH = False
 
 ROOT_URLCONF = 'backend.urls'
 
@@ -145,28 +173,96 @@ SIMPLE_JWT = {
 # --- CORS & CSRF FIXED CONFIG ---
 CORS_ALLOW_CREDENTIALS = True
 
-CORS_ALLOWED_ORIGINS = [
-    "https://mainajaa.vercel.app",
-    "http://localhost:5173",
-]
+# Get frontend URL from environment or use defaults
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://mainajaa.vercel.app')
+LOCAL_FRONTEND = os.environ.get('LOCAL_FRONTEND_URL', 'http://localhost:5173')
+
+# Untuk development, allow all origins jika DEBUG=True
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOWED_ORIGINS = []
+else:
+    CORS_ALLOW_ALL_ORIGINS = False
+    
+    # Baca CORS_ALLOWED_ORIGINS dari environment variable jika ada
+    CORS_ORIGINS_ENV = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+    if CORS_ORIGINS_ENV:
+        # Split by comma dan strip whitespace
+        CORS_ALLOWED_ORIGINS = [origin.strip() for origin in CORS_ORIGINS_ENV.split(',') if origin.strip()]
+    else:
+        # Fallback ke default
+        CORS_ALLOWED_ORIGINS = [
+            FRONTEND_URL,
+            LOCAL_FRONTEND,
+        ]
+    
+    # Tambahkan origin tambahan dari environment variable jika ada
+    ADDITIONAL_CORS_ORIGINS = os.environ.get('ADDITIONAL_CORS_ORIGINS', '')
+    if ADDITIONAL_CORS_ORIGINS:
+        for origin in ADDITIONAL_CORS_ORIGINS.split(','):
+            origin = origin.strip()
+            if origin and origin not in CORS_ALLOWED_ORIGINS:
+                CORS_ALLOWED_ORIGINS.append(origin)
 
 # Tambahkan ini untuk handle subdomain preview otomatis
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.vercel\.app$",
 ]
 
-CSRF_TRUSTED_ORIGINS = [
-    "https://mainajaa.vercel.app",
+# Allow all methods and headers
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
 ]
-CSRF_TRUSTED_ORIGIN_REGEXES = [
-    r"^https://.*\.vercel\.app$",
+
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
 ]
+
+# Preflight cache duration
+CORS_PREFLIGHT_MAX_AGE = 86400
+
+# CSRF Configuration - baca dari environment variable jika ada
+CSRF_TRUSTED_ORIGINS_ENV = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
+if CSRF_TRUSTED_ORIGINS_ENV:
+    # Split by comma dan strip whitespace
+    CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in CSRF_TRUSTED_ORIGINS_ENV.split(',') if origin.strip()]
+    # Jika ada wildcard pattern, tambahkan ke regex
+    CSRF_TRUSTED_ORIGIN_REGEXES = []
+    for origin in CSRF_TRUSTED_ORIGINS:
+        if '*' in origin:
+            # Convert wildcard to regex
+            regex_pattern = origin.replace('*', '.*').replace('.', r'\.')
+            CSRF_TRUSTED_ORIGIN_REGEXES.append(f'^{regex_pattern}$')
+    # Tambahkan default regex untuk vercel
+    if r"^https://.*\.vercel\.app$" not in CSRF_TRUSTED_ORIGIN_REGEXES:
+        CSRF_TRUSTED_ORIGIN_REGEXES.append(r"^https://.*\.vercel\.app$")
+else:
+    # Fallback ke default
+    CSRF_TRUSTED_ORIGINS = [
+        FRONTEND_URL,
+    ]
+    CSRF_TRUSTED_ORIGIN_REGEXES = [
+        r"^https://.*\.vercel\.app$",
+    ]
 
 
 # Midtrans
 MIDTRANS_SERVER_KEY = os.environ.get('MIDTRANS_SERVER_KEY')
 MIDTRANS_CLIENT_KEY = os.environ.get('MIDTRANS_CLIENT_KEY')
-MIDTRANS_IS_PRODUCTION = False
+MIDTRANS_IS_PRODUCTION = os.environ.get('MIDTRANS_IS_PRODUCTION', 'False').lower() in ('true', '1', 't')
 
 # Encryption
 FERNET_KEY = os.environ.get('FERNET_KEY')
