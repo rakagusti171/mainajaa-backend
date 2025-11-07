@@ -142,9 +142,26 @@ SIMPLE_JWT = {
 }
 
 # CORS Configuration
-CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173').split(',')
+# --- CORS & CSRF FIXED CONFIG ---
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')
+
+CORS_ALLOWED_ORIGINS = [
+    "https://mainajaa.vercel.app",
+    "http://localhost:5173",
+]
+
+# Tambahkan ini untuk handle subdomain preview otomatis
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://mainajaa.vercel.app",
+]
+CSRF_TRUSTED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+]
+
 
 # Midtrans
 MIDTRANS_SERVER_KEY = os.environ.get('MIDTRANS_SERVER_KEY')
