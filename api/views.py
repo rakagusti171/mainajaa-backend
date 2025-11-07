@@ -765,200 +765,7 @@ def get_dashboard_stats(request):
     }
     return Response(stats_data, status=status.HTTP_200_OK)
 
-@api_view(['GET'])
-@permission_classes([IsAdminUser])
-def get_analytics_data(request):
-    """
-    Mengembalikan data analytics lengkap untuk dashboard.
-    """
-    from django.utils import timezone
-    from datetime import timedelta
-    from collections import defaultdict
-    
-    # Time ranges
-    today = timezone.now().date()
-    yesterday = today - timedelta(days=1)
-    last_7_days = today - timedelta(days=7)
-    last_30_days = today - timedelta(days=30)
-    this_month_start = today.replace(day=1)
-    last_month_start = (this_month_start - timedelta(days=1)).replace(day=1)
-    last_month_end = this_month_start - timedelta(days=1)
-    
-    # Basic Stats
-    total_users = User.objects.count()
-    total_products = AkunGaming.objects.count() + TopUpProduct.objects.count()
-    total_orders = Pembelian.objects.count() + TopUpPembelian.objects.count()
-    
-    # Revenue Stats
-    revenue_today = (
-        Pembelian.objects.filter(status='COMPLETED', dibuat_pada__date=today).aggregate(total=Sum('harga_total'))['total'] or 0
-    ) + (
-        TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__date=today).aggregate(total=Sum('harga_pembelian'))['total'] or 0
-    )
-    
-    revenue_yesterday = (
-        Pembelian.objects.filter(status='COMPLETED', dibuat_pada__date=yesterday).aggregate(total=Sum('harga_total'))['total'] or 0
-    ) + (
-        TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__date=yesterday).aggregate(total=Sum('harga_pembelian'))['total'] or 0
-    )
-    
-    revenue_last_7_days = (
-        Pembelian.objects.filter(status='COMPLETED', dibuat_pada__gte=last_7_days).aggregate(total=Sum('harga_total'))['total'] or 0
-    ) + (
-        TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__gte=last_7_days).aggregate(total=Sum('harga_pembelian'))['total'] or 0
-    )
-    
-    revenue_last_30_days = (
-        Pembelian.objects.filter(status='COMPLETED', dibuat_pada__gte=last_30_days).aggregate(total=Sum('harga_total'))['total'] or 0
-    ) + (
-        TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__gte=last_30_days).aggregate(total=Sum('harga_pembelian'))['total'] or 0
-    )
-    
-    revenue_this_month = (
-        Pembelian.objects.filter(status='COMPLETED', dibuat_pada__gte=this_month_start).aggregate(total=Sum('harga_total'))['total'] or 0
-    ) + (
-        TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__gte=this_month_start).aggregate(total=Sum('harga_pembelian'))['total'] or 0
-    )
-    
-    revenue_last_month = (
-        Pembelian.objects.filter(status='COMPLETED', dibuat_pada__gte=last_month_start, dibuat_pada__lte=last_month_end).aggregate(total=Sum('harga_total'))['total'] or 0
-    ) + (
-        TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__gte=last_month_start, tanggal_pembelian__lte=last_month_end).aggregate(total=Sum('harga_pembelian'))['total'] or 0
-    )
-    
-    # Order Stats
-    orders_today = (
-        Pembelian.objects.filter(dibuat_pada__date=today).count() +
-        TopUpPembelian.objects.filter(tanggal_pembelian__date=today).count()
-    )
-    
-    orders_last_7_days = (
-        Pembelian.objects.filter(dibuat_pada__gte=last_7_days).count() +
-        TopUpPembelian.objects.filter(tanggal_pembelian__gte=last_7_days).count()
-    )
-    
-    # Sales by Game
-    sales_by_game = defaultdict(lambda: {'count': 0, 'revenue': 0})
-    
-    # Account sales by game
-    account_sales = Pembelian.objects.filter(status='COMPLETED').values('akun__game').annotate(
-        count=Count('id'),
-        revenue=Sum('harga_total')
-    )
-    for sale in account_sales:
-        game = sale['akun__game'] or 'Unknown'
-        sales_by_game[game]['count'] += sale['count']
-        sales_by_game[game]['revenue'] += float(sale['revenue'] or 0)
-    
-    # Topup sales by game
-    topup_sales = TopUpPembelian.objects.filter(status='COMPLETED').values('produk__game').annotate(
-        count=Count('id'),
-        revenue=Sum('harga_pembelian')
-    )
-    for sale in topup_sales:
-        game = sale['produk__game'] or 'Unknown'
-        sales_by_game[game]['count'] += sale['count']
-        sales_by_game[game]['revenue'] += float(sale['revenue'] or 0)
-    
-    sales_by_game_list = [
-        {'game': game, 'count': data['count'], 'revenue': data['revenue']}
-        for game, data in sorted(sales_by_game.items(), key=lambda x: x[1]['revenue'], reverse=True)
-    ]
-    
-    # Top Selling Products (Accounts)
-    top_accounts = Pembelian.objects.filter(status='COMPLETED', akun__isnull=False).values(
-        'akun__nama_akun', 'akun__game', 'akun__harga'
-    ).annotate(
-        sales_count=Count('id')
-    ).order_by('-sales_count')[:5]
-    
-    # Top Selling TopUp Products
-    top_topups = TopUpPembelian.objects.filter(status='COMPLETED').values(
-        'produk__nama_paket', 'produk__game', 'produk__harga'
-    ).annotate(
-        sales_count=Count('id')
-    ).order_by('-sales_count')[:5]
-    
-    # Recent Orders (last 10)
-    recent_account_orders = Pembelian.objects.select_related('akun', 'pembeli').order_by('-dibuat_pada')[:5]
-    recent_topup_orders = TopUpPembelian.objects.select_related('produk', 'pembeli').order_by('-tanggal_pembelian')[:5]
-    
-    recent_orders = []
-    for order in recent_account_orders:
-        recent_orders.append({
-            'id': order.id,
-            'type': 'AKUN',
-            'item_name': order.akun.nama_akun if order.akun else 'N/A',
-            'customer': order.pembeli.username if order.pembeli else 'N/A',
-            'amount': float(order.harga_total),
-            'status': order.status,
-            'date': order.dibuat_pada.isoformat(),
-        })
-    
-    for order in recent_topup_orders:
-        recent_orders.append({
-            'id': order.id,
-            'type': 'TOPUP',
-            'item_name': order.produk.nama_paket if order.produk else 'N/A',
-            'customer': order.pembeli.username if order.pembeli else 'N/A',
-            'amount': float(order.harga_pembelian),
-            'status': order.status,
-            'date': order.tanggal_pembelian.isoformat(),
-        })
-    
-    recent_orders.sort(key=lambda x: x['date'], reverse=True)
-    recent_orders = recent_orders[:10]
-    
-    # Daily Revenue (last 7 days)
-    daily_revenue = []
-    for i in range(6, -1, -1):
-        date = today - timedelta(days=i)
-        day_revenue = (
-            Pembelian.objects.filter(status='COMPLETED', dibuat_pada__date=date).aggregate(total=Sum('harga_total'))['total'] or 0
-        ) + (
-            TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__date=date).aggregate(total=Sum('harga_pembelian'))['total'] or 0
-        )
-        daily_revenue.append({
-            'date': date.isoformat(),
-            'revenue': float(day_revenue),
-        })
-    
-    # Conversion Rate (simplified)
-    total_views = AkunGaming.objects.count() * 10  # Estimated
-    total_sales = Pembelian.objects.filter(status='COMPLETED').count() + TopUpPembelian.objects.filter(status='COMPLETED').count()
-    conversion_rate = (total_sales / total_views * 100) if total_views > 0 else 0
-    
-    # Average Order Value
-    avg_order_value = revenue_last_30_days / orders_last_7_days if orders_last_7_days > 0 else 0
-    
-    return Response({
-        'summary': {
-            'total_users': total_users,
-            'total_products': total_products,
-            'total_orders': total_orders,
-            'conversion_rate': round(conversion_rate, 2),
-            'avg_order_value': round(avg_order_value, 2),
-        },
-        'revenue': {
-            'today': float(revenue_today),
-            'yesterday': float(revenue_yesterday),
-            'last_7_days': float(revenue_last_7_days),
-            'last_30_days': float(revenue_last_30_days),
-            'this_month': float(revenue_this_month),
-            'last_month': float(revenue_last_month),
-            'daily': daily_revenue,
-        },
-        'orders': {
-            'today': orders_today,
-            'last_7_days': orders_last_7_days,
-        },
-        'sales_by_game': sales_by_game_list,
-        'top_products': {
-            'accounts': list(top_accounts),
-            'topups': list(top_topups),
-        },
-        'recent_orders': recent_orders,
-    }, status=status.HTTP_200_OK)
+# Function removed - using the enhanced version below (line 1241)
 
 @api_view(['GET'])
 @permission_classes([IsAdminUser])
@@ -1414,6 +1221,97 @@ def get_analytics_data(request):
     # Average Order Value
     avg_order_value = revenue_last_30_days / orders_last_7_days if orders_last_7_days > 0 else 0
     
+    # Hourly Revenue (today)
+    hourly_revenue = []
+    for hour in range(24):
+        hour_start = timezone.make_aware(datetime.combine(today, datetime.min.time().replace(hour=hour)))
+        hour_end = timezone.make_aware(datetime.combine(today, datetime.min.time().replace(hour=hour+1))) if hour < 23 else timezone.make_aware(datetime.combine(today, datetime.max.time()))
+        hour_rev = (
+            Pembelian.objects.filter(status='COMPLETED', dibuat_pada__gte=hour_start, dibuat_pada__lt=hour_end).aggregate(total=Sum('harga_total'))['total'] or 0
+        ) + (
+            TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__gte=hour_start, tanggal_pembelian__lt=hour_end).aggregate(total=Sum('harga_pembelian'))['total'] or 0
+        )
+        hourly_revenue.append({
+            'hour': hour,
+            'revenue': float(hour_rev),
+        })
+    
+    # Weekly Revenue (last 4 weeks)
+    weekly_revenue = []
+    for week in range(4):
+        week_start = today - timedelta(days=(week+1)*7)
+        week_end = today - timedelta(days=week*7)
+        week_start_dt = timezone.make_aware(datetime.combine(week_start, datetime.min.time()))
+        week_end_dt = timezone.make_aware(datetime.combine(week_end, datetime.max.time()))
+        week_rev = (
+            Pembelian.objects.filter(status='COMPLETED', dibuat_pada__gte=week_start_dt, dibuat_pada__lte=week_end_dt).aggregate(total=Sum('harga_total'))['total'] or 0
+        ) + (
+            TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__gte=week_start_dt, tanggal_pembelian__lte=week_end_dt).aggregate(total=Sum('harga_pembelian'))['total'] or 0
+        )
+        weekly_revenue.append({
+            'week': f'Week {4-week}',
+            'date': week_start.isoformat(),
+            'revenue': float(week_rev),
+        })
+    
+    # Monthly Revenue (last 6 months)
+    monthly_revenue = []
+    for month in range(6):
+        month_date = today.replace(day=1) - timedelta(days=month*30)
+        month_start = month_date.replace(day=1)
+        if month == 0:
+            month_end = today
+        else:
+            next_month = month_start + timedelta(days=32)
+            month_end = (next_month.replace(day=1) - timedelta(days=1))
+        month_start_dt = timezone.make_aware(datetime.combine(month_start, datetime.min.time()))
+        month_end_dt = timezone.make_aware(datetime.combine(month_end, datetime.max.time()))
+        month_rev = (
+            Pembelian.objects.filter(status='COMPLETED', dibuat_pada__gte=month_start_dt, dibuat_pada__lte=month_end_dt).aggregate(total=Sum('harga_total'))['total'] or 0
+        ) + (
+            TopUpPembelian.objects.filter(status='COMPLETED', tanggal_pembelian__gte=month_start_dt, tanggal_pembelian__lte=month_end_dt).aggregate(total=Sum('harga_pembelian'))['total'] or 0
+        )
+        monthly_revenue.append({
+            'month': month_start.strftime('%b %Y'),
+            'date': month_start.isoformat(),
+            'revenue': float(month_rev),
+        })
+    monthly_revenue.reverse()
+    
+    # Order Status Breakdown
+    order_status_breakdown = {
+        'COMPLETED': Pembelian.objects.filter(status='COMPLETED').count() + TopUpPembelian.objects.filter(status='COMPLETED').count(),
+        'PENDING': Pembelian.objects.filter(status='PENDING').count() + TopUpPembelian.objects.filter(status='PENDING').count(),
+        'CANCELED': Pembelian.objects.filter(status='CANCELED').count() + TopUpPembelian.objects.filter(status='CANCELED').count(),
+    }
+    
+    # Revenue by Product Type
+    revenue_by_type = {
+        'accounts': float(Pembelian.objects.filter(status='COMPLETED').aggregate(total=Sum('harga_total'))['total'] or 0),
+        'topups': float(TopUpPembelian.objects.filter(status='COMPLETED').aggregate(total=Sum('harga_pembelian'))['total'] or 0),
+    }
+    
+    # User Behavior (New vs Returning)
+    from django.db.models import Q
+    users_with_orders = User.objects.filter(
+        Q(pembelian__isnull=False) | Q(topuppembelian__isnull=False)
+    ).distinct()
+    new_users_last_30 = User.objects.filter(date_joined__gte=last_30_days).count()
+    returning_users = max(0, users_with_orders.count() - new_users_last_30)
+    
+    # Conversion Funnel Data
+    total_products_viewed = AkunGaming.objects.count() + TopUpProduct.objects.count()
+    products_in_cart = 0  # Estimated - bisa ditambahkan jika ada cart feature
+    orders_created = total_orders
+    orders_completed = order_status_breakdown['COMPLETED']
+    
+    conversion_funnel = {
+        'products_viewed': total_products_viewed,
+        'products_in_cart': products_in_cart,
+        'orders_created': orders_created,
+        'orders_completed': orders_completed,
+    }
+    
     return Response({
         'summary': {
             'total_users': total_users,
@@ -1430,17 +1328,28 @@ def get_analytics_data(request):
             'this_month': float(revenue_this_month),
             'last_month': float(revenue_last_month),
             'daily': daily_revenue,
+            'hourly': hourly_revenue,
+            'weekly': weekly_revenue,
+            'monthly': monthly_revenue,
         },
         'orders': {
             'today': orders_today,
             'last_7_days': orders_last_7_days,
+            'status_breakdown': order_status_breakdown,
         },
         'sales_by_game': sales_by_game_list,
+        'revenue_by_type': revenue_by_type,
         'top_products': {
             'accounts': list(top_accounts),
             'topups': list(top_topups),
         },
         'recent_orders': recent_orders,
+        'user_behavior': {
+            'new_users_last_30': new_users_last_30,
+            'returning_users': returning_users,
+            'total_active_users': users_with_orders.count(),
+        },
+        'conversion_funnel': conversion_funnel,
     }, status=status.HTTP_200_OK)
 
 @api_view(['POST'])

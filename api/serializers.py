@@ -65,18 +65,55 @@ class ChangePasswordSerializer(serializers.Serializer):
         return user
 
 class AkunGamingImageSerializer(serializers.ModelSerializer):
+    gambar = serializers.SerializerMethodField()
+    
     class Meta:
         model = AkunGamingImage
         fields = ['id', 'gambar']
+    
+    def get_gambar(self, obj):
+        if obj.gambar:
+            try:
+                url = obj.gambar.url
+                # Jika URL sudah absolute (Cloudinary), langsung return
+                if url.startswith('http://') or url.startswith('https://'):
+                    return url
+                # Jika relative URL (local), buat absolute dengan request context
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(url)
+                # Fallback jika tidak ada request context
+                return url
+            except Exception:
+                return None
+        return None
 
 class AkunGamingSerializer(serializers.ModelSerializer):
     is_favorited = serializers.SerializerMethodField()
     images = AkunGamingImageSerializer(many=True, read_only=True)
+    gambar = serializers.SerializerMethodField()
 
     class Meta:
         model = AkunGaming
         fields = ['id', 'nama_akun', 'game', 'deskripsi', 'harga', 'gambar',
                   'level', 'is_sold', 'is_favorited', 'images']
+
+    def get_gambar(self, obj):
+        if obj.gambar:
+            try:
+                url = obj.gambar.url
+                # Jika URL sudah absolute (Cloudinary), langsung return
+                if url.startswith('http://') or url.startswith('https://'):
+                    return url
+                # Jika relative URL (local), buat absolute dengan request context
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(url)
+                # Fallback jika tidak ada request context
+                return url
+            except Exception:
+                return None
+        return None
 
     def get_is_favorited(self, obj):
         request = self.context.get('request')
@@ -125,9 +162,28 @@ class PembelianSerializer(serializers.ModelSerializer):
 
 
 class TopUpProductSerializer(serializers.ModelSerializer):
+    gambar = serializers.SerializerMethodField()
+    
     class Meta:
         model = TopUpProduct
         fields = ['id', 'game', 'nama_paket', 'harga', 'gambar']
+    
+    def get_gambar(self, obj):
+        if obj.gambar:
+            try:
+                url = obj.gambar.url
+                # Jika URL sudah absolute (Cloudinary), langsung return
+                if url.startswith('http://') or url.startswith('https://'):
+                    return url
+                # Jika relative URL (local), buat absolute dengan request context
+                request = self.context.get('request')
+                if request:
+                    return request.build_absolute_uri(url)
+                # Fallback jika tidak ada request context
+                return url
+            except Exception:
+                return None
+        return None
 
 class TopUpPembelianSerializer(serializers.ModelSerializer):
     produk = TopUpProductSerializer(read_only=True)
