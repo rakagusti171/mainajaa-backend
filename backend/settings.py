@@ -114,6 +114,25 @@ REST_FRAMEWORK = {
     ]
 }
 
+# JWT Token Settings
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),  # Access token berlaku 24 jam
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),   # Refresh token berlaku 7 hari
+    'ROTATE_REFRESH_TOKENS': True,                 # Rotate refresh token setiap kali digunakan
+    'BLACKLIST_AFTER_ROTATION': True,              # Blacklist token lama setelah rotate
+    'UPDATE_LAST_LOGIN': True,                      # Update last login time
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
+}
+
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173').split(',')
 CORS_ALLOW_CREDENTIALS = True

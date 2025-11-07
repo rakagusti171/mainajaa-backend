@@ -56,4 +56,5 @@ urlpatterns = [
     path('admin/all-coupons/', views.admin_get_all_coupons, name='admin_all_coupons'),
     path('admin/coupon/create/', views.admin_create_coupon, name='admin_create_coupon'),
     path('admin/coupon/<int:pk>/toggle-active/', views.admin_toggle_coupon_active, name='admin_toggle_coupon_active'),
+    path('admin/analytics/', views.get_analytics_data, name='admin_analytics'),
 ]
