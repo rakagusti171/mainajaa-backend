@@ -45,6 +45,7 @@ urlpatterns = [
     # === Dashboard Admin ===
     path('admin/all-orders/', views.admin_get_all_orders, name='admin_all_orders'),
     path('admin/dashboard-stats/', views.get_dashboard_stats, name='admin_dashboard_stats'),
+    path('admin/analytics/', views.get_analytics_data, name='admin_analytics'),
     path('admin/all-products/', views.admin_get_all_products, name='admin_all_products'),
     path('admin/product/delete/', views.admin_delete_product, name='admin_delete_product'),
     path('admin/akun/create/', views.admin_create_akun, name='admin_create_akun'),
