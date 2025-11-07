@@ -1180,4 +1180,3 @@ def submit_review(request, purchase_id):
     except Exception as e:
         return Response({'error': f'Gagal menyimpan ulasan: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-
