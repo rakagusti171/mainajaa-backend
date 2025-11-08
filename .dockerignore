@@ -1,34 +1,53 @@
-# Git
+# ==================================
+# GIT
+# ==================================
 .git/
 .gitignore
 
-# Virtual Environment
+# ==================================
+# PYTHON ENVIRONMENT
+# ==================================
 venv/
 .venv/
 env/
-*.env
+ENV/
+*.env        # ⛔ Jangan pernah include file .env ke dalam image
 
-# Python cache
+# ==================================
+# PYTHON CACHE
+# ==================================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# IDE / Editor folders
-.idea/
-.vscode/
-
-# Local database
+# ==================================
+# DJANGO FILES
+# ==================================
 db.sqlite3
 *.sqlite3
+media/              # kalau pakai Cloudinary / external storage
+staticfiles/        # biar gak ke-copy kalau collectstatic udah dihandle waktu build
+*.log               # log files
 
-# Media files (jika Anda menanganinya di cloud seperti Cloudinary)
-media/
-
-# Static files (jika dikumpulkan oleh server)
-# staticfiles/ 
-# (beri tanda # jika Anda menjalankan collectstatic saat build)
-
-# OS files
+# ==================================
+# OS / SYSTEM FILES
+# ==================================
 .DS_Store
 Thumbs.db
+
+# ==================================
+# EDITOR / IDE
+# ==================================
+.idea/
+.vscode/
+*.code-workspace
+
+# ==================================
+# BUILD / DEPLOYMENT
+# ==================================
+__dist__/
+build/
+node_modules/
+*.bak
+*.tmp
