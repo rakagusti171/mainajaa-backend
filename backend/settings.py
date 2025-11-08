@@ -1,5 +1,3 @@
-# backend/settings.py
-
 from pathlib import Path
 import os
 import dj_database_url
@@ -29,9 +27,8 @@ if BACKEND_DOMAIN:
         ALLOWED_HOSTS.append(domain)
 
 RAILWAY_DOMAIN = os.environ.get('RAILWAY_PUBLIC_DOMAIN', '')
-if RAILWAY_DOMAIN:
-    if RAILWAY_DOMAIN not in ALLOWED_HOSTS:
-        ALLOWED_HOSTS.append(RAILWAY_DOMAIN)
+if RAILWAY_DOMAIN and RAILWAY_DOMAIN not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(RAILWAY_DOMAIN)
 
 if DEBUG:
     ALLOWED_HOSTS = ['*']
@@ -129,13 +126,13 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # ======================================================
-# CLOUDINARY CONFIG
+# CLOUDINARY CONFIG (aktif otomatis di production)
 # ======================================================
 CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME')
 CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY')
 CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET')
 
-if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+if not DEBUG and CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
     DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
     CLOUDINARY_STORAGE = {
         'CLOUD_NAME': CLOUDINARY_CLOUD_NAME,
