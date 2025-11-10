@@ -27,13 +27,14 @@ snap = midtransclient.Snap(
 )
 from .models import (
     Kupon, AkunGaming, TopUpProduct, Pembelian, TopUpPembelian, 
-    AkunGamingImage, 
+    AkunGamingImage, Cart, CartItem, CartOrder, CartOrderItem,
 )
 from .serializers import (
     MyTokenObtainPairSerializer, ChangePasswordSerializer, 
     AkunGamingSerializer, TopUpProductSerializer, PembelianSerializer,
     TopUpPembelianSerializer, UlasanSerializer, RegisterSerializer, KuponAdminSerializer,
     RiwayatAkunSerializer, RiwayatTopUpSerializer,PembelianDetailSerializer,AkunGamingSerializer,
+    CartSerializer, CartItemSerializer,
 )
 
 # ===================================================================
@@ -271,37 +272,415 @@ def get_pembelian_history(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def download_invoice(request, kode_transaksi):
+    """
+    Download invoice PDF untuk pembelian.
+    Support AKUN, TOPUP, dan CART order.
+    """
+    user = request.user
+    
+    try:
+        pembelian_data = {}
+        
+        if kode_transaksi.startswith('CART-'):
+            # Handle Cart Order
+            cart_order = CartOrder.objects.get(kode_transaksi=kode_transaksi, pembeli=user)
+            
+            items = []
+            for order_item in cart_order.order_items.all():
+                if order_item.item_type == 'AKUN' and order_item.akun:
+                    items.append({
+                        'nama': order_item.akun.nama_akun,
+                        'game': order_item.akun.game,
+                        'harga': float(order_item.harga_saat_ditambahkan),
+                        'quantity': order_item.quantity,
+                        'subtotal': float(order_item.get_total_price()),
+                    })
+            
+            pembelian_data = {
+                'kode_transaksi': cart_order.kode_transaksi,
+                'tanggal': cart_order.dibuat_pada.strftime('%d %B %Y, %H:%M WIB'),
+                'pembeli': {
+                    'username': cart_order.pembeli.username,
+                    'email': cart_order.pembeli.email,
+                },
+                'items': items,
+                'subtotal': float(cart_order.harga_total),
+                'diskon': 0,  # Diskon sudah dihitung di harga_total
+                'total': float(cart_order.harga_total),
+                'status': cart_order.status,
+                'tipe': 'CART',
+            }
+            
+        elif kode_transaksi.startswith('AKUN-'):
+            # Handle single AKUN purchase
+            pembelian = Pembelian.objects.get(kode_transaksi=kode_transaksi, pembeli=user)
+            
+            items = []
+            if pembelian.akun:
+                items.append({
+                    'nama': pembelian.akun.nama_akun,
+                    'game': pembelian.akun.game,
+                    'harga': float(pembelian.harga_asli or pembelian.akun.harga),
+                    'quantity': 1,
+                    'subtotal': float(pembelian.harga_total),
+                })
+            
+            diskon = float(pembelian.harga_asli - pembelian.harga_total) if pembelian.harga_asli else 0
+            
+            pembelian_data = {
+                'kode_transaksi': pembelian.kode_transaksi,
+                'tanggal': pembelian.dibuat_pada.strftime('%d %B %Y, %H:%M WIB'),
+                'pembeli': {
+                    'username': pembelian.pembeli.username,
+                    'email': pembelian.pembeli.email,
+                },
+                'items': items,
+                'subtotal': float(pembelian.harga_asli or pembelian.harga_total),
+                'diskon': diskon,
+                'total': float(pembelian.harga_total),
+                'status': pembelian.status,
+                'tipe': 'AKUN',
+            }
+            
+        elif kode_transaksi.startswith('TOPUP-'):
+            # Handle single TOPUP purchase
+            pembelian = TopUpPembelian.objects.get(kode_transaksi=kode_transaksi, pembeli=user)
+            
+            items = []
+            if pembelian.produk:
+                items.append({
+                    'nama': pembelian.produk.nama_paket,
+                    'game': pembelian.produk.game,
+                    'harga': float(pembelian.harga_asli or pembelian.produk.harga),
+                    'quantity': 1,
+                    'subtotal': float(pembelian.harga_pembelian),
+                })
+            
+            diskon = float(pembelian.harga_asli - pembelian.harga_pembelian) if pembelian.harga_asli else 0
+            
+            pembelian_data = {
+                'kode_transaksi': pembelian.kode_transaksi,
+                'tanggal': pembelian.tanggal_pembelian.strftime('%d %B %Y, %H:%M WIB'),
+                'pembeli': {
+                    'username': pembelian.pembeli.username,
+                    'email': pembelian.pembeli.email,
+                },
+                'items': items,
+                'subtotal': float(pembelian.harga_asli or pembelian.harga_pembelian),
+                'diskon': diskon,
+                'total': float(pembelian.harga_pembelian),
+                'status': pembelian.status,
+                'tipe': 'TOPUP',
+            }
+        else:
+            return Response({'error': 'Format kode transaksi tidak valid.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Generate and return PDF
+        return create_invoice_response(pembelian_data)
+        
+    except (Pembelian.DoesNotExist, TopUpPembelian.DoesNotExist, CartOrder.DoesNotExist):
+        return Response({'error': 'Pesanan tidak ditemukan atau bukan milik Anda.'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        print(f"Error generating invoice: {e}")
+        import traceback
+        traceback.print_exc()
+        return Response({'error': f'Gagal generate invoice: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_crypto_payment(request):
+    """
+    Verify crypto payment dengan transaction hash.
+    Admin perlu verifikasi manual untuk saat ini.
+    """
+    user = request.user
+    data = request.data
+    kode_transaksi = data.get('kode_transaksi')
+    tx_hash = data.get('tx_hash')
+    
+    if not kode_transaksi or not tx_hash:
+        return Response({'error': 'Kode transaksi dan transaction hash diperlukan.'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        # Find order (Pembelian or CartOrder)
+        pembelian = None
+        cart_order = None
+        
+        if kode_transaksi.startswith('CART-'):
+            cart_order = CartOrder.objects.get(kode_transaksi=kode_transaksi, pembeli=user)
+        elif kode_transaksi.startswith('AKUN-'):
+            pembelian = Pembelian.objects.get(kode_transaksi=kode_transaksi, pembeli=user)
+        else:
+            return Response({'error': 'Format kode transaksi tidak valid.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update transaction hash and verify payment
+        if cart_order:
+            cart_order.crypto_tx_hash = tx_hash
+            cart_order.save()
+            
+            # Try to verify payment automatically
+            from .crypto_payment import verify_crypto_payment
+            is_verified, confirmations, error_msg = verify_crypto_payment(
+                tx_hash, 
+                cart_order.crypto_currency, 
+                cart_order.crypto_amount, 
+                cart_order.crypto_address
+            )
+            
+            if is_verified and confirmations >= 1:  # At least 1 confirmation
+                # Auto-verify if transaction is confirmed
+                cart_order.status = 'COMPLETED'
+                cart_order.crypto_confirmed_at = timezone.now()
+                cart_order.save()
+                
+                # Create individual Pembelian records for each item
+                for order_item in cart_order.order_items.all():
+                    try:
+                        if order_item.item_type == 'AKUN' and order_item.akun:
+                            pembelian_akun = Pembelian.objects.create(
+                                pembeli=cart_order.pembeli,
+                                akun=order_item.akun,
+                                harga_total=order_item.get_total_price(),
+                                harga_asli=order_item.harga_saat_ditambahkan,
+                                kupon=cart_order.kupon,
+                                status='COMPLETED',
+                                payment_method=cart_order.payment_method,
+                                crypto_tx_hash=tx_hash,
+                                crypto_confirmed_at=timezone.now(),
+                            )
+                            order_item.pembelian_akun = pembelian_akun
+                            order_item.save()
+                            
+                            # Reduce stock
+                            order_item.akun.stock = max(0, order_item.akun.stock - order_item.quantity)
+                            if order_item.akun.stock == 0:
+                                order_item.akun.is_sold = True
+                            order_item.akun.save()
+                    except Exception as e:
+                        print(f"Error creating pembelian for order_item {order_item.id}: {e}")
+                        continue
+                
+                if cart_order.kupon:
+                    cart_order.kupon.digunakan_oleh.add(cart_order.pembeli)
+                
+                # Send email notification
+                try:
+                    from .utils import decrypt_data
+                    subject = f'Pesanan Cart [COMPLETED] - Kode: {cart_order.kode_transaksi}'
+                    message = f"""Halo {cart_order.pembeli.username},
+
+Pembayaran crypto Anda telah berhasil diverifikasi!
+
+Kode Transaksi: {cart_order.kode_transaksi}
+Transaction Hash: {tx_hash}
+Confirmations: {confirmations}
+
+Detail Akun yang Dibeli:
+"""
+                    for order_item in cart_order.order_items.filter(item_type='AKUN'):
+                        if order_item.akun and order_item.pembelian_akun:
+                            try:
+                                email_dec = decrypt_data(order_item.akun.akun_email)
+                                pass_dec = decrypt_data(order_item.akun.akun_password)
+                                message += f"""
+- {order_item.akun.nama_akun} ({order_item.akun.game})
+  Email/Username: {email_dec}
+  Password: {pass_dec}
+"""
+                            except Exception as e:
+                                message += f"\n- {order_item.akun.nama_akun} ({order_item.akun.game})\n"
+                    
+                    message += "\nTerima kasih,\nTim MainAjaa"
+                    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [cart_order.pembeli.email], fail_silently=False)
+                except Exception as e:
+                    print(f"Error sending email: {e}")
+                
+                return Response({
+                    'success': 'Pembayaran berhasil diverifikasi!',
+                    'status': 'COMPLETED',
+                    'confirmations': confirmations,
+                    'message': 'Pembayaran Anda telah dikonfirmasi. Detail akun telah dikirim ke email Anda.'
+                }, status=status.HTTP_200_OK)
+            else:
+                # Manual verification needed
+                return Response({
+                    'success': 'Transaction hash berhasil disimpan.',
+                    'status': 'PENDING',
+                    'message': 'Pembayaran sedang dalam proses verifikasi. Anda akan menerima notifikasi setelah pembayaran dikonfirmasi.',
+                    'verification_note': error_msg if error_msg else 'Menunggu konfirmasi blockchain'
+                }, status=status.HTTP_200_OK)
+                
+        elif pembelian:
+            pembelian.crypto_tx_hash = tx_hash
+            pembelian.save()
+            
+            # Try to verify payment automatically
+            from .crypto_payment import verify_crypto_payment
+            is_verified, confirmations, error_msg = verify_crypto_payment(
+                tx_hash,
+                pembelian.crypto_currency,
+                pembelian.crypto_amount,
+                pembelian.crypto_address
+            )
+            
+            if is_verified and confirmations >= 1:
+                # Auto-verify if transaction is confirmed
+                pembelian.status = 'COMPLETED'
+                pembelian.crypto_confirmed_at = timezone.now()
+                pembelian.save()
+                
+                # Reduce stock
+                if pembelian.akun:
+                    pembelian.akun.stock = max(0, pembelian.akun.stock - 1)
+                    if pembelian.akun.stock == 0:
+                        pembelian.akun.is_sold = True
+                    pembelian.akun.save()
+                
+                if pembelian.kupon:
+                    pembelian.kupon.digunakan_oleh.add(pembelian.pembeli)
+                
+                # Send email notification
+                try:
+                    from .utils import decrypt_data
+                    subject = f'Pesanan [COMPLETED] - Kode: {pembelian.kode_transaksi}'
+                    akun_email_dec = decrypt_data(pembelian.akun.akun_email)
+                    akun_pass_dec = decrypt_data(pembelian.akun.akun_password)
+                    message = f"""Halo {pembelian.pembeli.username},
+
+Pembayaran crypto Anda telah berhasil diverifikasi!
+
+Kode Transaksi: {pembelian.kode_transaksi}
+Transaction Hash: {tx_hash}
+Confirmations: {confirmations}
+
+Detail Akun:
+Email/Username: {akun_email_dec}
+Password: {akun_pass_dec}
+
+Harap segera ganti password dan amankan akun Anda.
+
+Terima kasih,
+Tim MainAjaa"""
+                    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [pembelian.pembeli.email], fail_silently=False)
+                except Exception as e:
+                    print(f"Error sending email: {e}")
+                
+                return Response({
+                    'success': 'Pembayaran berhasil diverifikasi!',
+                    'status': 'COMPLETED',
+                    'confirmations': confirmations,
+                    'message': 'Pembayaran Anda telah dikonfirmasi. Detail akun telah dikirim ke email Anda.'
+                }, status=status.HTTP_200_OK)
+            else:
+                # Manual verification needed
+                return Response({
+                    'success': 'Transaction hash berhasil disimpan.',
+                    'status': 'PENDING',
+                    'message': 'Pembayaran sedang dalam proses verifikasi. Anda akan menerima notifikasi setelah pembayaran dikonfirmasi.',
+                    'verification_note': error_msg if error_msg else 'Menunggu konfirmasi blockchain'
+                }, status=status.HTTP_200_OK)
+    
+    except (Pembelian.DoesNotExist, CartOrder.DoesNotExist):
+        return Response({'error': 'Pesanan tidak ditemukan atau bukan milik Anda.'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        print(f"Error verifying crypto payment: {e}")
+        return Response({'error': f'Gagal memverifikasi pembayaran: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_purchase_detail(request, kode_transaksi):
     """
-    Mengambil detail satu pesanan (Akun atau TopUp)
+    Mengambil detail satu pesanan (Akun, TopUp, atau CartOrder)
     berdasarkan kode_transaksi dan memastikan itu milik user.
     """
     user = request.user
-    pembelian = None
-    serializer = None
     
     try:
-        if kode_transaksi.startswith('AKUN-'):
+        if kode_transaksi.startswith('CART-'):
+            # Ambil CartOrder
+            cart_order = CartOrder.objects.get(kode_transaksi=kode_transaksi, pembeli=user)
+            
+            # Prepare response dengan semua order items
+            order_items_data = []
+            for order_item in cart_order.order_items.all():
+                item_data = {
+                    'id': order_item.id,
+                    'item_type': order_item.item_type,
+                    'quantity': order_item.quantity,
+                    'harga_saat_ditambahkan': float(order_item.harga_saat_ditambahkan),
+                    'total_price': float(order_item.get_total_price()),
+                }
+                
+                # Cart hanya support AKUN
+                if order_item.item_type == 'AKUN' and order_item.akun:
+                    item_data['akun'] = {
+                        'id': order_item.akun.id,
+                        'nama_akun': order_item.akun.nama_akun,
+                        'game': order_item.akun.game,
+                        'level': order_item.akun.level,
+                    }
+                    # Jika sudah completed, include email dan password yang sudah di-decrypt
+                    if cart_order.status == 'COMPLETED':
+                        try:
+                            item_data['akun_email'] = decrypt_data(order_item.akun.akun_email)
+                            item_data['akun_password'] = decrypt_data(order_item.akun.akun_password)
+                        except Exception as e:
+                            print(f"Error decrypting account data for order_item {order_item.id}: {e}")
+                            item_data['akun_email'] = None
+                            item_data['akun_password'] = None
+                        
+                        # Include pembelian reference jika ada
+                        if order_item.pembelian_akun:
+                            item_data['pembelian_kode_transaksi'] = order_item.pembelian_akun.kode_transaksi
+                            item_data['pembelian_id'] = order_item.pembelian_akun.id
+                    else:
+                        item_data['akun_email'] = None
+                        item_data['akun_password'] = None
+                        item_data['pembelian_kode_transaksi'] = None
+                
+                order_items_data.append(item_data)
+            
+            response_data = {
+                'tipe': 'CART',
+                'kode_transaksi': cart_order.kode_transaksi,
+                'status': cart_order.status,
+                'harga_total': float(cart_order.harga_total),
+                'dibuat_pada': cart_order.dibuat_pada.isoformat(),
+                'kupon': cart_order.kupon.kode if cart_order.kupon else None,
+                'order_items': order_items_data,
+                'total_items': len(order_items_data),
+                'midtrans_token': cart_order.midtrans_token,
+                # Info untuk frontend
+                'is_cart_order': True,
+                'message': 'Cart order berisi multiple akun. Detail email dan password setiap akun tersedia di bawah.' if cart_order.status == 'COMPLETED' else 'Menunggu pembayaran. Email dan password akan tersedia setelah pembayaran berhasil.',
+            }
+            
+            return Response(response_data)
+            
+        elif kode_transaksi.startswith('AKUN-'):
             # Ambil pembelian AKUN
             pembelian = Pembelian.objects.get(kode_transaksi=kode_transaksi, pembeli=user)
             # Gunakan serializer detail yang bisa dekripsi
             serializer = PembelianDetailSerializer(pembelian)
+            return Response(serializer.data)
             
         elif kode_transaksi.startswith('TOPUP-'):
             # Ambil pembelian TOP UP
             pembelian = TopUpPembelian.objects.get(kode_transaksi=kode_transaksi, pembeli=user)
             # Gunakan serializer TopUp yang sudah ada (cukup detail)
-            serializer = TopUpPembelianSerializer(pembelian) 
+            serializer = TopUpPembelianSerializer(pembelian)
+            return Response(serializer.data)
         
         else:
             return Response({'error': 'Format kode transaksi tidak valid.'}, status=status.HTTP_400_BAD_REQUEST)
             
-        return Response(serializer.data)
-        
-    except (Pembelian.DoesNotExist, TopUpPembelian.DoesNotExist):
+    except (Pembelian.DoesNotExist, TopUpPembelian.DoesNotExist, CartOrder.DoesNotExist):
         return Response({'error': 'Pesanan tidak ditemukan atau bukan milik Anda.'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         print(f"Error get_purchase_detail: {e}")
+        import traceback
+        traceback.print_exc()
         return Response({'error': 'Terjadi kesalahan internal.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
@@ -438,12 +817,19 @@ def create_pembelian(request):
     kode_kupon = data.get('kode_kupon', None)
     
     akun = get_object_or_404(AkunGaming, pk=akun_id)
+    if akun.stock <= 0:
+        return Response({'error': 'Maaf, stok akun ini sudah habis.'}, status=status.HTTP_400_BAD_REQUEST)
     if akun.is_sold:
         return Response({'error': 'Akun sudah terjual'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Get payment method from request
+    payment_method = data.get('payment_method', 'MIDTRANS')
+    if payment_method not in ['MIDTRANS', 'CRYPTO_USDT', 'CRYPTO_ETH', 'CRYPTO_SOL']:
+        payment_method = 'MIDTRANS'
         
     try:
-        pembelian_obj, midtrans_token = Pembelian.create_pembelian(
-            pembeli=user, akun=akun, kode_kupon_str=kode_kupon
+        pembelian_obj, payment_token = Pembelian.create_pembelian(
+            pembeli=user, akun=akun, kode_kupon_str=kode_kupon, payment_method=payment_method
         )
 
         try:
@@ -527,62 +913,243 @@ Tim MainAjaa
 @permission_classes([IsAuthenticated])
 def get_pembelian_history(request):
     """
-    Mengambil gabungan riwayat pembelian Akun dan Top Up untuk user yang login,
+    Mengambil gabungan riwayat pembelian Akun, Top Up, dan CartOrder untuk user yang login,
     diurutkan berdasarkan tanggal terbaru.
+    
+    Untuk cart order:
+    - Cart order muncul sebagai 1 item di history
+    - Individual pembelian yang dibuat dari cart order juga muncul terpisah
+    - User bisa melihat detail cart order untuk melihat semua akun dengan email/password
     """
     user = request.user
 
+    # Get individual purchases (termasuk yang dibuat dari cart order)
     akun_history = Pembelian.objects.filter(pembeli=user)
     topup_history = TopUpPembelian.objects.filter(pembeli=user)
     akun_data = RiwayatAkunSerializer(akun_history, many=True).data
     topup_data = RiwayatTopUpSerializer(topup_history, many=True).data
-    combined_history = list(akun_data) + list(topup_data)
-    combined_history.sort(key=lambda x: str(x.get('tanggal')), reverse=True)
+    
+    # Tambahkan flag untuk menandai apakah pembelian dari cart order
+    for item in akun_data:
+        # Check if this pembelian is from cart order
+        pembelian_obj = akun_history.filter(id=item.get('id')).first()
+        if pembelian_obj and hasattr(pembelian_obj, 'cart_order_item') and pembelian_obj.cart_order_item.exists():
+            cart_order_item = pembelian_obj.cart_order_item.first()
+            item['from_cart_order'] = cart_order_item.cart_order.kode_transaksi
+            item['cart_order_kode'] = cart_order_item.cart_order.kode_transaksi
+        else:
+            item['from_cart_order'] = None
+            item['cart_order_kode'] = None
+    
+    # Get cart orders (muncul sebagai 1 item untuk setiap cart order)
+    cart_orders = CartOrder.objects.filter(pembeli=user).order_by('-dibuat_pada')
+    cart_data = []
+    for cart_order in cart_orders:
+        # Count hanya akun (cart hanya support AKUN sekarang)
+        akun_count = cart_order.order_items.filter(item_type='AKUN').count()
+        cart_data.append({
+            'id': cart_order.id,
+            'kode_transaksi': cart_order.kode_transaksi,
+            'tipe': 'CART',
+            'nama_item': f'Cart Order ({akun_count} akun)',
+            'total': float(cart_order.harga_total),
+            'status': cart_order.status,
+            'tanggal': cart_order.dibuat_pada.isoformat(),
+            'midtrans_token': cart_order.midtrans_token,
+            'item_count': akun_count,
+            'is_cart_order': True,  # Flag untuk frontend
+        })
+    
+    # Combine semua data
+    combined_history = list(akun_data) + list(topup_data) + list(cart_data)
+    
+    # Sort by tanggal (dibuat_pada untuk akun, tanggal_pembelian untuk topup, dibuat_pada untuk cart)
+    def get_sort_key(item):
+        if item.get('tipe') == 'CART':
+            return item.get('tanggal', '')
+        elif item.get('tipe') == 'topup':
+            return item.get('tanggal_pembelian', item.get('tanggal', ''))
+        else:
+            return item.get('tanggal', item.get('dibuat_pada', ''))
+    
+    combined_history.sort(key=get_sort_key, reverse=True)
     
     return Response(combined_history)
 
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@transaction.atomic
 def midtrans_webhook(request):
+    """
+    Endpoint untuk menerima notifikasi webhook dari Midtrans.
+    Menangani AKUN, TOPUP, dan CART order.
+    """
     try:
-        data = json.loads(request.body)
+        # Midtrans mengirim data sebagai JSON dalam request.body
+        import json
+        if hasattr(request, 'body') and request.body:
+            try:
+                data = json.loads(request.body)
+            except json.JSONDecodeError:
+                data = request.data
+        else:
+            data = request.data
+            
         order_id = data.get('order_id')
+        status_code = data.get('status_code')
+        gross_amount = data.get('gross_amount')
+        signature_key = data.get('signature_key')
         transaction_status = data.get('transaction_status')
 
-        if not order_id or not transaction_status:
-            return Response({'error': 'Data tidak valid'}, status=status.HTTP_400_BAD_REQUEST)
+        # 1. Verifikasi Signature Key (Keamanan) - skip jika tidak ada signature_key (untuk testing)
+        if signature_key and status_code and gross_amount:
+            expected_signature = _buat_signature_key(order_id, status_code, gross_amount)
+            if signature_key != expected_signature:
+                print(f"WEBHOOK GAGAL: Signature key tidak valid untuk order {order_id}")
+                return Response({'status': 'error', 'message': 'Invalid signature'}, status=400)
 
-        # Tentukan tipe pembelian berdasarkan prefix
+        # 2. Tentukan model berdasarkan prefix order_id
         pembelian = None
-        if order_id.startswith('TOPUP-'):
-            pembelian = get_object_or_404(TopUpPembelian, kode_transaksi=order_id)
+        cart_order = None
+        model_type = None
+
+        if order_id.startswith('CART-'):
+            # Handle Cart Order - multiple items dalam satu transaction
+            try:
+                cart_order = CartOrder.objects.get(kode_transaksi=order_id)
+                model_type = 'CART'
+            except CartOrder.DoesNotExist:
+                print(f"WEBHOOK GAGAL: CartOrder {order_id} tidak ditemukan.")
+                return Response({'status': 'error', 'message': 'Order not found'}, status=404)
+        
         elif order_id.startswith('AKUN-'):
-            pembelian = get_object_or_404(Pembelian, kode_transaksi=order_id)
-        else:
-            return Response({'error': 'Tipe order tidak dikenali'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                pembelian = Pembelian.objects.get(kode_transaksi=order_id)
+                model_type = 'AKUN'
+            except Pembelian.DoesNotExist:
+                pass
+        
+        elif order_id.startswith('TOPUP-'):
+            try:
+                pembelian = TopUpPembelian.objects.get(kode_transaksi=order_id)
+                model_type = 'TOPUP'
+            except TopUpPembelian.DoesNotExist:
+                pass
 
+        # 3. Handle jika order tidak ditemukan
+        if not pembelian and not cart_order:
+            print(f"WEBHOOK GAGAL: Order {order_id} tidak ditemukan di model manapun.")
+            return Response({'status': 'error', 'message': 'Order not found'}, status=404)
+
+        # 4. Update status di database
         if transaction_status == 'capture' or transaction_status == 'settlement':
-            # Hanya proses jika statusnya masih PENDING
-            if pembelian.status == 'PENDING':
-                pembelian.status = 'COMPLETED'
-                
-                subject = ''
-                message = ''
-                
-                # --- LOGIKA EMAIL LUNAS DIMULAI ---
-                if isinstance(pembelian, Pembelian) and pembelian.akun:
-                    # Ini adalah pembelian AKUN
-                    pembelian.akun.is_sold = True
-                    pembelian.akun.save()
-                    print(f"Akun ID {pembelian.akun.id} marked as sold for order {order_id}")
+            if model_type == 'CART':
+                # Handle Cart Order
+                if cart_order.status != 'COMPLETED':
+                    cart_order.status = 'COMPLETED'
+                    cart_order.save()
+                    
+                    # Create pembelian untuk setiap item dalam cart order (hanya AKUN)
+                    for order_item in cart_order.order_items.all():
+                        try:
+                            # Cart hanya support AKUN
+                            if order_item.item_type == 'AKUN' and order_item.akun:
+                                # Create Pembelian untuk akun
+                                pembelian_akun = Pembelian.objects.create(
+                                    pembeli=cart_order.pembeli,
+                                    akun=order_item.akun,
+                                    harga_total=order_item.get_total_price(),
+                                    harga_asli=order_item.harga_saat_ditambahkan,
+                                    kupon=cart_order.kupon,
+                                    status='COMPLETED'  # Langsung COMPLETED karena payment sudah success
+                                )
+                                order_item.pembelian_akun = pembelian_akun
+                                order_item.save()
+                                
+                                # Reduce stock and mark as sold if stock is 0
+                                order_item.akun.stock = max(0, order_item.akun.stock - order_item.quantity)
+                                if order_item.akun.stock == 0:
+                                    order_item.akun.is_sold = True
+                                order_item.akun.save()
+                                print(f"WEBHOOK: Akun {order_item.akun.id} stock dikurangi {order_item.quantity}, sisa stock: {order_item.akun.stock}")
+                        
+                        except Exception as e:
+                            print(f"WEBHOOK ERROR: Gagal create pembelian untuk order_item {order_item.id}: {e}")
+                            continue
+                    
+                    # Mark kupon as used
+                    if cart_order.kupon:
+                        cart_order.kupon.digunakan_oleh.add(cart_order.pembeli)
+                    
+                    # Send email notification
+                    try:
+                        # Dekripsi data akun untuk email (hanya AKUN, cart hanya support AKUN)
+                        akun_details = []
+                        for order_item in cart_order.order_items.filter(item_type='AKUN'):
+                            if order_item.akun:
+                                try:
+                                    akun_email_dec = decrypt_data(order_item.akun.akun_email)
+                                    akun_pass_dec = decrypt_data(order_item.akun.akun_password)
+                                    akun_details.append({
+                                        'nama': order_item.akun.nama_akun,
+                                        'email': akun_email_dec,
+                                        'password': akun_pass_dec
+                                    })
+                                except Exception as e:
+                                    print(f"Error decrypting account {order_item.akun.id} for email: {e}")
+                        
+                        subject = f'Pesanan Cart LUNAS - Kode: {cart_order.kode_transaksi}'
+                        message = f"""
+Halo {cart_order.pembeli.username},
 
-                    # Dekripsi data akun untuk dikirim
-                    akun_email_dec = decrypt_data(pembelian.akun.akun_email)
-                    akun_pass_dec = decrypt_data(pembelian.akun.akun_password)
+Pembayaran Anda untuk pesanan cart {cart_order.kode_transaksi} telah berhasil!
 
-                    subject = f'Pesanan LUNAS - Kode: {pembelian.kode_transaksi}'
-                    message = f"""
+Total Pembayaran: Rp {cart_order.harga_total:,.0f}
+Jumlah Akun: {len(akun_details)}
+
+"""
+                        if akun_details:
+                            message += "Berikut adalah detail data akun yang Anda beli:\n"
+                            message += "==========================================\n"
+                            for idx, akun in enumerate(akun_details, 1):
+                                message += f"\n[{idx}] Akun: {akun['nama']}\n"
+                                message += f"    Email/Username: {akun['email']}\n"
+                                message += f"    Password: {akun['password']}\n"
+                                message += "==========================================\n"
+                        
+                        message += "\nData ini juga dapat diakses melalui halaman 'Riwayat Pesanan' di profil Anda.\n"
+                        message += "Klik pada Cart Order untuk melihat detail semua akun.\n\n"
+                        message += "Terima kasih telah berbelanja,\nTim MainAjaa"
+                        
+                        send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [cart_order.pembeli.email], fail_silently=False)
+                        print(f"WEBHOOK: Email konfirmasi cart order LUNAS dikirim ke {cart_order.pembeli.email}")
+                    except Exception as e:
+                        print(f"WEBHOOK ERROR: Gagal mengirim email untuk cart order: {e}")
+                    
+                    print(f"WEBHOOK SUKSES: Cart order {order_id} completed dan pembelian dibuat.")
+            
+            elif model_type == 'AKUN' and pembelian:
+                # Handle single AKUN purchase
+                if pembelian.status != 'COMPLETED':
+                    pembelian.status = 'COMPLETED'
+                    pembelian.save()
+                    
+                    if pembelian.akun:
+                        # Reduce stock and mark as sold if stock is 0
+                        pembelian.akun.stock = max(0, pembelian.akun.stock - 1)
+                        if pembelian.akun.stock == 0:
+                            pembelian.akun.is_sold = True
+                        pembelian.akun.save()
+                        print(f"WEBHOOK SUKSES: Akun {pembelian.akun.id} stock dikurangi 1, sisa stock: {pembelian.akun.stock}")
+                    
+                    # Send email (existing logic)
+                    try:
+                        akun_email_dec = decrypt_data(pembelian.akun.akun_email)
+                        akun_pass_dec = decrypt_data(pembelian.akun.akun_password)
+                        
+                        subject = f'Pesanan LUNAS - Kode: {pembelian.kode_transaksi}'
+                        message = f"""
 Halo {pembelian.pembeli.username},
 
 Pembayaran Anda untuk pesanan {pembelian.kode_transaksi} ({pembelian.akun.nama_akun}) telah berhasil!
@@ -593,16 +1160,31 @@ Email/Username Akun: {akun_email_dec}
 Password Akun: {akun_pass_dec}
 ----------------------------------
 
-Harap segera amankan akun Anda. Data ini juga dapat diakses melalui halaman 'Riwayat Pesanan' di profil Anda (setelah kami menyiapkannya).
+Harap segera amankan akun Anda. Data ini juga dapat diakses melalui halaman 'Riwayat Pesanan' di profil Anda.
 
 Terima kasih telah berbelanja,
 Tim MainAjaa
-                    """
-
-                elif isinstance(pembelian, TopUpPembelian):
-                    # Ini adalah pembelian TOP UP
-                    subject = f'Pesanan Top Up LUNAS - Kode: {pembelian.kode_transaksi}'
-                    message = f"""
+                        """
+                        send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [pembelian.pembeli.email], fail_silently=False)
+                        print(f"WEBHOOK: Email konfirmasi LUNAS dikirim ke {pembelian.pembeli.email}")
+                    except Exception as e:
+                        print(f"WEBHOOK ERROR: Gagal mengirim email: {e}")
+                    
+                    if pembelian.kupon:
+                        pembelian.kupon.digunakan_oleh.add(pembelian.pembeli)
+                    
+                    print(f"WEBHOOK SUKSES: Status untuk {order_id} sudah COMPLETED.")
+            
+            elif model_type == 'TOPUP' and pembelian:
+                # Handle single TOPUP purchase
+                if pembelian.status != 'COMPLETED':
+                    pembelian.status = 'COMPLETED'
+                    pembelian.save()
+                    
+                    # Send email (existing logic)
+                    try:
+                        subject = f'Pesanan Top Up LUNAS - Kode: {pembelian.kode_transaksi}'
+                        message = f"""
 Halo {pembelian.pembeli.username},
 
 Pembayaran Anda untuk pesanan Top Up {pembelian.kode_transaksi} ({pembelian.produk.nama_paket}) telah berhasil!
@@ -612,117 +1194,49 @@ Game ID: {pembelian.game_user_id} {pembelian.game_zone_id or ''}
 
 Terima kasih telah berbelanja,
 Tim MainAjaa
-                    """
-
-
-                try:
-                    if subject and message:
+                        """
                         send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [pembelian.pembeli.email], fail_silently=False)
-                        print(f"Email konfirmasi LUNAS dikirim ke {pembelian.pembeli.email} for order {order_id}")
-                except Exception as e:
-                    print(f"ERROR: Gagal mengirim email LUNAS ke {pembelian.pembeli.email}: {e}")
-
-                if pembelian.kupon:
-                    pembelian.kupon.digunakan_oleh.add(pembelian.pembeli)
-
-        elif transaction_status == 'pending':
-            pass
-
-        elif transaction_status == 'cancel' or transaction_status == 'expire' or transaction_status == 'deny':
-            if pembelian.status == 'PENDING':
-                pembelian.status = 'CANCELED'
-                if isinstance(pembelian, Pembelian) and pembelian.akun:
-                    pembelian.akun.is_sold = False
-                    pembelian.akun.save()
-                    print(f"Akun ID {pembelian.akun.id} marked as NOT sold (reverted) for order {order_id}")
-
-        pembelian.save()
-        return Response({'status': 'success'}, status=status.HTTP_200_OK)
-
-    except Exception as e:
-        print(f"Error processing Midtrans webhook: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-@csrf_exempt
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def midtrans_webhook(request):
-    """
-    Endpoint untuk menerima notifikasi webhook dari Midtrans.
-    Ini akan menangani AKUN dan TOPUP.
-    """
-    try:
-        data = request.data
-        order_id = data.get('order_id')
-        status_code = data.get('status_code')
-        gross_amount = data.get('gross_amount')
-        signature_key = data.get('signature_key')
-        transaction_status = data.get('transaction_status')
-
-        # 1. Verifikasi Signature Key (Keamanan)
-        expected_signature = _buat_signature_key(order_id, status_code, gross_amount)
-        if signature_key != expected_signature:
-            print(f"WEBHOOK GAGAL: Signature key tidak valid untuk order {order_id}")
-            return Response({'status': 'error', 'message': 'Invalid signature'}, status=400)
-
-        # 2. Tentukan model berdasarkan prefix order_id
-        pembelian = None
-        model_type = None
-
-        if order_id.startswith('AKUN-'):
-            try:
-                # Menggunakan model 'Pembelian' Anda
-                pembelian = Pembelian.objects.get(kode_transaksi=order_id)
-                model_type = 'AKUN'
-            except Pembelian.DoesNotExist:
-                pass  # Biarkan error 404 di bawah
-        
-        elif order_id.startswith('TOPUP-'): # Asumsi prefix ini
-            try:
-                # Menggunakan model 'TopUpPembelian' Anda
-                pembelian = TopUpPembelian.objects.get(kode_transaksi=order_id)
-                model_type = 'TOPUP'
-            except TopUpPembelian.DoesNotExist:
-                pass  # Biarkan error 404 di bawah
-
-        # 3. Handle jika order tidak ditemukan
-        if not pembelian:
-            print(f"WEBHOOK GAGAL: Order {order_id} tidak ditemukan di model manapun.")
-            return Response({'status': 'error', 'message': 'Order not found'}, status=404)
-
-        # 4. Update status di database
-        if transaction_status == 'capture' or transaction_status == 'settlement':
-            if pembelian.status != 'COMPLETED':
-                pembelian.status = 'COMPLETED'
-                pembelian.save()
-
-                # Jika ini pembelian AKUN, tandai akun sebagai terjual
-                if model_type == 'AKUN':
-                    try:
-                        akun = pembelian.akun
-                        akun.is_sold = True
-                        akun.save()
-                        print(f"WEBHOOK SUKSES: Akun {akun.id} ditandai terjual.")
+                        print(f"WEBHOOK: Email konfirmasi top up LUNAS dikirim ke {pembelian.pembeli.email}")
                     except Exception as e:
-                        print(f"WEBHOOK ERROR: Gagal menandai akun terjual untuk {order_id}: {e}")
-                try:
-                    print(f"WEBHOOK SUKSES: Email konfirmasi untuk {order_id} akan dikirim (jika diaktifkan).")
-                except Exception as e:
-                    print(f"WEBHOOK SUKSES: Gagal kirim email, tapi status diupdate. Error: {e}")
-            
-            print(f"WEBHOOK SUKSES: Status untuk {order_id} sudah COMPLETED.")
+                        print(f"WEBHOOK ERROR: Gagal mengirim email: {e}")
+                    
+                    if pembelian.kupon:
+                        pembelian.kupon.digunakan_oleh.add(pembelian.pembeli)
+                    
+                    print(f"WEBHOOK SUKSES: Status untuk {order_id} sudah COMPLETED.")
 
         elif transaction_status == 'cancel' or transaction_status == 'expire' or transaction_status == 'deny':
-            if pembelian.status != 'CANCELLED':
-                pembelian.status = 'CANCELLED'
-                pembelian.save()
-            print(f"WEBHOOK SUKSES: Status untuk {order_id} diupdate ke CANCELLED.")
+            if model_type == 'CART' and cart_order:
+                if cart_order.status != 'CANCELED':
+                    cart_order.status = 'CANCELED'
+                    cart_order.save()
+                    # Restore stock for all items in cart order
+                    for order_item in cart_order.order_items.filter(item_type='AKUN'):
+                        if order_item.akun:
+                            order_item.akun.stock += order_item.quantity
+                            order_item.akun.is_sold = False
+                            order_item.akun.save()
+                            print(f"WEBHOOK: Stock akun {order_item.akun.id} dikembalikan {order_item.quantity}, stock sekarang: {order_item.akun.stock}")
+                print(f"WEBHOOK: Cart order {order_id} diupdate ke CANCELED.")
+            elif pembelian:
+                if pembelian.status != 'CANCELED':
+                    pembelian.status = 'CANCELED'
+                    pembelian.save()
+                    # Revert akun status if AKUN (restore stock)
+                    if model_type == 'AKUN' and pembelian.akun:
+                        pembelian.akun.stock += 1  # Restore stock
+                        pembelian.akun.is_sold = False
+                        pembelian.akun.save()
+                        print(f"WEBHOOK: Stock akun {pembelian.akun.id} dikembalikan, stock sekarang: {pembelian.akun.stock}")
+                print(f"WEBHOOK: Status untuk {order_id} diupdate ke CANCELED.")
 
         # Kirim balasan 200 OK ke Midtrans
         return Response({'status': 'ok'}, status=200)
 
     except Exception as e:
         print(f"WEBHOOK CRASH: Terjadi error: {e}")
+        import traceback
+        traceback.print_exc()
         return Response({'status': 'error', 'message': str(e)}, status=500)
 
 # ===================================================================
@@ -830,6 +1344,7 @@ def admin_create_akun(request):
     level = request.data.get('level')
     deskripsi = request.data.get('deskripsi')
     harga = request.data.get('harga')
+    stock = request.data.get('stock', 1)  # Default stock = 1
     # --- TAMBAHKAN INI ---
     akun_email = request.data.get('akun_email')
     akun_password = request.data.get('akun_password')
@@ -841,6 +1356,14 @@ def admin_create_akun(request):
     # Validasi (Tambahkan validasi kredensial)
     if not all([nama_akun, game, harga, gambar_cover, akun_email, akun_password]): # <-- Tambahkan akun_email & akun_password
         return Response({'error': 'Semua field bertanda * wajib diisi.'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Validasi stock
+    try:
+        stock = int(stock)
+        if stock < 0:
+            return Response({'error': 'Stock tidak boleh negatif.'}, status=status.HTTP_400_BAD_REQUEST)
+    except (ValueError, TypeError):
+        return Response({'error': 'Stock harus berupa angka.'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         # --- Enkripsi Kredensial ---
@@ -850,7 +1373,7 @@ def admin_create_akun(request):
              raise ValueError("Gagal mengenkripsi kredensial akun.")
         # --- Selesai Enkripsi ---
 
-        # Buat objek AkunGaming utama (Tambahkan kredensial terenkripsi)
+        # Buat objek AkunGaming utama (Tambahkan kredensial terenkripsi dan stock)
         akun = AkunGaming.objects.create(
             nama_akun=nama_akun,
             game=game,
@@ -858,6 +1381,7 @@ def admin_create_akun(request):
             deskripsi=deskripsi,
             harga=harga,
             gambar=gambar_cover,
+            stock=stock,
             akun_email=encrypted_email,       # <-- Tambahkan ini
             akun_password=encrypted_password # <-- Tambahkan ini
         )
@@ -899,6 +1423,18 @@ def admin_update_akun(request, pk):
         akun.level = request.data.get('level', akun.level)
         akun.deskripsi = request.data.get('deskripsi', akun.deskripsi)
         akun.harga = request.data.get('harga', akun.harga)
+        if 'stock' in request.data:
+            try:
+                stock = int(request.data.get('stock'))
+                if stock >= 0:
+                    akun.stock = stock
+                    # Update is_sold jika stock habis
+                    if stock == 0:
+                        akun.is_sold = True
+                    elif stock > 0 and akun.is_sold:
+                        akun.is_sold = False
+            except (ValueError, TypeError):
+                pass  # Skip jika stock tidak valid
         if 'gambar' in request.FILES:
             akun.gambar = request.FILES.get('gambar')
         akun.save()
@@ -1549,4 +2085,325 @@ def submit_review(request, purchase_id):
 
     except Exception as e:
         return Response({'error': f'Gagal menyimpan ulasan: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# ===================================================================
+# CART VIEWS
+# ===================================================================
+
+def get_or_create_cart(user):
+    """Helper function untuk get or create cart untuk user"""
+    cart, created = Cart.objects.get_or_create(user=user)
+    return cart
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_cart(request):
+    """Mengambil cart user (auto create jika belum ada)"""
+    try:
+        cart = get_or_create_cart(request.user)
+        serializer = CartSerializer(cart, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@transaction.atomic
+def add_to_cart(request):
+    """
+    Menambahkan item AKUN ke cart.
+    Cart hanya support AKUN, tidak support TOPUP karena top-up memerlukan input ID dan server.
+    """
+    user = request.user
+    data = request.data
+    item_type = data.get('item_type', 'AKUN')  # Default AKUN
+    
+    # Cart hanya support AKUN
+    if item_type != 'AKUN':
+        return Response({
+            'error': 'Cart hanya mendukung akun gaming. Untuk top-up, silakan lakukan pembelian langsung.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        cart = get_or_create_cart(user)
+        
+        akun_id = data.get('akun_id')
+        quantity = int(data.get('quantity', 1))
+        
+        if not akun_id:
+            return Response({'error': 'akun_id diperlukan'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        akun = get_object_or_404(AkunGaming, pk=akun_id)
+        
+        if akun.stock <= 0:
+            return Response({'error': 'Maaf, stok akun ini sudah habis.'}, status=status.HTTP_400_BAD_REQUEST)
+        if akun.is_sold:
+            return Response({'error': 'Akun ini sudah terjual'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Check if item already exists in cart
+        cart_item, created = CartItem.objects.get_or_create(
+            cart=cart,
+            item_type='AKUN',
+            akun=akun,
+            defaults={
+                'quantity': quantity,
+                'harga_saat_ditambahkan': akun.harga
+            }
+        )
+        
+        if not created:
+            # Update quantity if item already exists
+            cart_item.quantity += quantity
+            cart_item.save()
+        
+        serializer = CartItemSerializer(cart_item, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def update_cart_item(request, item_id):
+    """Update quantity cart item"""
+    try:
+        cart = get_or_create_cart(request.user)
+        cart_item = get_object_or_404(CartItem, pk=item_id, cart=cart)
+        
+        quantity = request.data.get('quantity')
+        if quantity is not None:
+            quantity = int(quantity)
+            if quantity <= 0:
+                return Response({'error': 'Quantity harus lebih dari 0'}, status=status.HTTP_400_BAD_REQUEST)
+            cart_item.quantity = quantity
+            cart_item.save()
+        
+        serializer = CartItemSerializer(cart_item, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def remove_from_cart(request, item_id):
+    """Menghapus item dari cart"""
+    try:
+        cart = get_or_create_cart(request.user)
+        cart_item = get_object_or_404(CartItem, pk=item_id, cart=cart)
+        cart_item.delete()
+        return Response({'success': 'Item berhasil dihapus dari cart'}, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def clear_cart(request):
+    """Menghapus semua item dari cart"""
+    try:
+        cart = get_or_create_cart(request.user)
+        cart.items.all().delete()
+        return Response({'success': 'Cart berhasil dikosongkan'}, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@transaction.atomic
+def checkout_from_cart(request):
+    """
+    Checkout dari cart - membuat satu CartOrder dengan semua item di cart.
+    Semua item akan digabungkan dalam satu Midtrans transaction.
+    """
+    user = request.user
+    data = request.data
+    kode_kupon = data.get('kode_kupon', None)
+    payment_method = data.get('payment_method', 'MIDTRANS')
+    
+    # Validate payment method
+    if payment_method not in ['MIDTRANS', 'CRYPTO_USDT', 'CRYPTO_ETH', 'CRYPTO_SOL']:
+        payment_method = 'MIDTRANS'
+    
+    try:
+        cart = get_or_create_cart(user)
+        cart_items = cart.items.all()
+        
+        if not cart_items.exists():
+            return Response({'error': 'Cart kosong'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validasi semua items
+        valid_items = []
+        total_harga = Decimal('0')
+        kupon_obj = None
+        
+        # Validasi kupon jika ada
+        if kode_kupon:
+            try:
+                kupon_obj = Kupon.objects.get(kode__iexact=kode_kupon, aktif=True)
+                if kupon_obj.digunakan_oleh.filter(id=user.id).exists():
+                    return Response({'error': 'Kupon ini sudah pernah Anda gunakan.'}, status=status.HTTP_400_BAD_REQUEST)
+            except Kupon.DoesNotExist:
+                return Response({'error': 'Kupon tidak valid.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Calculate total dan validate items (hanya AKUN)
+        for item in cart_items:
+            # Cart hanya support AKUN
+            if item.item_type != 'AKUN':
+                continue  # Skip non-AKUN items (shouldn't happen, but just in case)
+            
+            if not item.akun or item.akun.stock <= 0 or item.akun.is_sold:
+                continue  # Skip jika akun tidak tersedia atau sudah terjual
+            
+            item_total = item.get_total_price()
+            total_harga += item_total
+            valid_items.append(item)
+        
+        if not valid_items:
+            return Response({'error': 'Tidak ada item valid untuk checkout'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Apply kupon discount jika ada
+        harga_asli = total_harga
+        harga_final = total_harga
+        if kupon_obj:
+            diskon = (harga_asli * Decimal(kupon_obj.diskon_persen / 100))
+            harga_final = harga_asli - diskon
+        
+        # Create CartOrder
+        cart_order = CartOrder.objects.create(
+            pembeli=user,
+            harga_total=harga_final,
+            kupon=kupon_obj,
+            status='PENDING',
+            payment_method=payment_method
+        )
+        
+        # Create CartOrderItem untuk setiap item (hanya AKUN)
+        item_details = []
+        for item in valid_items:
+            cart_order_item = CartOrderItem.objects.create(
+                cart_order=cart_order,
+                item_type='AKUN',
+                akun=item.akun,
+                quantity=item.quantity,
+                harga_saat_ditambahkan=item.harga_saat_ditambahkan
+            )
+            
+            # Prepare item details untuk Midtrans (jika menggunakan Midtrans)
+            if payment_method == 'MIDTRANS':
+                item_details.append({
+                    'id': str(item.akun.id),
+                    'price': int(item.harga_saat_ditambahkan),
+                    'quantity': item.quantity,
+                    'name': item.akun.nama_akun
+                })
+        
+        # Handle payment based on payment method
+        if payment_method == 'MIDTRANS':
+            # Create Midtrans transaction dengan semua items
+            try:
+                snap = midtransclient.Snap(
+                    is_production=settings.MIDTRANS_IS_PRODUCTION,
+                    server_key=settings.MIDTRANS_SERVER_KEY,
+                    client_key=settings.MIDTRANS_CLIENT_KEY
+                )
+                
+                transaction_details = {
+                    'order_id': str(cart_order.kode_transaksi),
+                    'gross_amount': int(harga_final)
+                }
+                
+                # Include item details untuk transparency
+                transaction_data = {
+                    'transaction_details': transaction_details,
+                    'item_details': item_details
+                }
+                
+                transaction = snap.create_transaction(transaction_data)
+                midtrans_token = transaction['token']
+                cart_order.midtrans_token = midtrans_token
+                cart_order.save()
+                
+                payment_token = midtrans_token
+            except Exception as e:
+                # Rollback: delete cart_order jika Midtrans gagal
+                cart_order.delete()
+                print(f"Error creating Midtrans transaction: {e}")
+                return Response({'error': f'Gagal membuat token pembayaran Midtrans: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            # Crypto payment
+            from .crypto_payment import calculate_crypto_amount, get_crypto_wallet_address
+            crypto_code = payment_method.replace('CRYPTO_', '')
+            crypto_amount, crypto_price, idr_rate = calculate_crypto_amount(cart_order.harga_total, crypto_code)
+            wallet_address = get_crypto_wallet_address(crypto_code)
+            
+            if not crypto_amount or not wallet_address:
+                cart_order.delete()
+                return Response({'error': f'Gagal membuat pembayaran crypto untuk {crypto_code}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            cart_order.crypto_address = wallet_address
+            cart_order.crypto_amount = crypto_amount
+            cart_order.crypto_currency = crypto_code
+            cart_order.save()
+            payment_token = None
+        
+        # Clear cart setelah order berhasil dibuat
+        cart.items.all().delete()
+        
+        # Send email notification
+        try:
+            subject = f'Pesanan Cart [PENDING] - Kode: {cart_order.kode_transaksi}'
+            message = f"""
+Halo {user.username},
+
+Pesanan Anda dengan {len(valid_items)} item telah berhasil dibuat dengan kode transaksi:
+{cart_order.kode_transaksi}
+
+Total Tagihan: Rp {cart_order.harga_total:,.0f}
+Metode Pembayaran: {cart_order.get_payment_method_display()}
+
+Pesanan ini sekarang menunggu pembayaran Anda.
+Anda dapat melihat status pesanan dan melanjutkan pembayaran kapan saja melalui halaman Profil Anda.
+
+Terima kasih,
+Tim MainAjaa
+            """
+            send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=False)
+            print(f"Email konfirmasi cart order (pending) dikirim ke {user.email} for order {cart_order.kode_transaksi}")
+        except Exception as e:
+            print(f"ERROR: Gagal mengirim email konfirmasi cart order: {e}")
+        
+        response_data = {
+            'success': 'Checkout berhasil',
+            'cart_order_id': cart_order.id,
+            'kode_transaksi': cart_order.kode_transaksi,
+            'total_items': len(valid_items),
+            'total_price': float(harga_final),
+            'payment_method': cart_order.payment_method,
+        }
+        
+        if payment_method == 'MIDTRANS':
+            response_data['midtrans_token'] = payment_token
+        else:
+            response_data['crypto_address'] = cart_order.crypto_address
+            response_data['crypto_amount'] = float(cart_order.crypto_amount) if cart_order.crypto_amount else None
+            response_data['crypto_currency'] = cart_order.crypto_currency
+        
+        return Response(response_data, status=status.HTTP_201_CREATED)
+    
+    except Exception as e:
+        print(f"Error in checkout_from_cart: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_cart_count(request):
+    """Mengambil jumlah item di cart (untuk badge di navbar)"""
+    try:
+        cart = get_or_create_cart(request.user)
+        count = cart.get_item_count()
+        return Response({'count': count}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'count': 0, 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     

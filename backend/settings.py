@@ -62,7 +62,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
-    'corsheaders.middleware.CorsMiddleware',  # ✅ harus di atas SessionMiddleware
+    'corsheaders.middleware.CorsMiddleware',  
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -184,6 +184,7 @@ CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
     "https://mainajaa.vercel.app",
     "https://mainajaa-backend-production.up.railway.app",
+    "http://127.0.0.1:5173",
 ]
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
@@ -194,6 +195,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://mainajaa.vercel.app",
     "https://mainajaa-backend-production.up.railway.app",
     "https://*.vercel.app",
+    "http://127.0.0.1:5173",
 ]
 
 CORS_ALLOW_METHODS = [
@@ -215,6 +217,19 @@ MIDTRANS_SERVER_KEY = os.environ.get('MIDTRANS_SERVER_KEY')
 MIDTRANS_CLIENT_KEY = os.environ.get('MIDTRANS_CLIENT_KEY')
 MIDTRANS_IS_PRODUCTION = os.environ.get('MIDTRANS_IS_PRODUCTION', 'False').lower() in ('true', '1', 't')
 FERNET_KEY = os.environ.get('FERNET_KEY')
+
+# Crypto Payment Wallet Addresses
+USDT_WALLET_ADDRESS = os.environ.get('USDT_WALLET_ADDRESS', '')
+ETH_WALLET_ADDRESS = os.environ.get('ETH_WALLET_ADDRESS', '')
+SOL_WALLET_ADDRESS = os.environ.get('SOL_WALLET_ADDRESS', '')
+
+# Blockchain Explorer API Keys (for automatic verification)
+ETHERSCAN_API_KEY = os.environ.get('ETHERSCAN_API_KEY', 'YourApiKeyToken')  # Get free API key from etherscan.io
+# Note: TronGrid (USDT) doesn't require API keys for basic queries
+# Solana RPC is free but consider using dedicated RPC endpoint for production
+
+# Exchange Rate API (for IDR to USD conversion)
+EXCHANGERATE_API_KEY = os.environ.get('EXCHANGERATE_API_KEY', '')  # Optional: for exchangerate-api.com
 
 # ======================================================
 # EMAIL CONFIG

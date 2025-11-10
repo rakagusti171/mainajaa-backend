@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.conf import settings
 from cryptography.fernet import Fernet
-from .models import AkunGaming, TopUpProduct, Pembelian, Kupon, TopUpPembelian, AkunGamingImage
+from .models import AkunGaming, TopUpProduct, Pembelian, Kupon, TopUpPembelian, AkunGamingImage, Cart, CartItem, CartOrder, CartOrderItem
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import password_validation
 
@@ -92,11 +92,12 @@ class AkunGamingSerializer(serializers.ModelSerializer):
     is_favorited = serializers.SerializerMethodField()
     images = AkunGamingImageSerializer(many=True, read_only=True)
     gambar = serializers.SerializerMethodField()
+    is_available = serializers.ReadOnlyField()
 
     class Meta:
         model = AkunGaming
         fields = ['id', 'nama_akun', 'game', 'deskripsi', 'harga', 'gambar',
-                  'level', 'is_sold', 'is_favorited', 'images']
+                  'level', 'is_sold', 'stock', 'is_available', 'is_favorited', 'images']
 
     def get_gambar(self, obj):
         if obj.gambar:
@@ -267,12 +268,22 @@ class PembelianDetailSerializer(serializers.ModelSerializer):
     akun_email_decrypted = serializers.SerializerMethodField()
     akun_password_decrypted = serializers.SerializerMethodField()
     
+    # Crypto payment fields
+    payment_method = serializers.ReadOnlyField()
+    crypto_address = serializers.ReadOnlyField()
+    crypto_amount = serializers.ReadOnlyField()
+    crypto_currency = serializers.ReadOnlyField()
+    crypto_tx_hash = serializers.ReadOnlyField()
+    crypto_confirmed_at = serializers.ReadOnlyField()
+    
     class Meta:
         model = Pembelian
         fields = [
             'id', 'kode_transaksi', 'tipe', 'nama_item', 'total', 'status', 'tanggal',
             'pembeli_username', 'harga_asli', 'kupon', 'rating', 'ulasan',
-            'akun_email_decrypted', 'akun_password_decrypted'
+            'akun_email_decrypted', 'akun_password_decrypted',
+            'payment_method', 'midtrans_token',
+            'crypto_address', 'crypto_amount', 'crypto_currency', 'crypto_tx_hash', 'crypto_confirmed_at'
         ]
     
     def get_tipe(self, obj):
@@ -287,3 +298,94 @@ class PembelianDetailSerializer(serializers.ModelSerializer):
         if obj.status == 'COMPLETED' and obj.akun:
             return decrypt_data(obj.akun.akun_password)
         return "Tersedia setelah pembayaran lunas"
+
+class CartItemSerializer(serializers.ModelSerializer):
+    """Serializer untuk CartItem"""
+    akun_detail = serializers.SerializerMethodField()
+    topup_product_detail = serializers.SerializerMethodField()
+    total_price = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = CartItem
+        fields = [
+            'id', 'item_type', 'akun', 'akun_detail', 'topup_product', 'topup_product_detail',
+            'game_user_id', 'game_zone_id', 'quantity', 'harga_saat_ditambahkan', 'total_price', 'dibuat_pada'
+        ]
+        read_only_fields = ['harga_saat_ditambahkan', 'dibuat_pada']
+    
+    def get_akun_detail(self, obj):
+        """Get akun detail dengan request context"""
+        if obj.akun:
+            request = self.context.get('request')
+            return AkunGamingSerializer(obj.akun, context={'request': request}).data
+        return None
+    
+    def get_topup_product_detail(self, obj):
+        """Get topup product detail dengan request context"""
+        if obj.topup_product:
+            request = self.context.get('request')
+            return TopUpProductSerializer(obj.topup_product, context={'request': request}).data
+        return None
+    
+    def get_total_price(self, obj):
+        return float(obj.get_total_price())
+    
+    def validate(self, data):
+        """Validasi data sebelum create/update"""
+        item_type = data.get('item_type')
+        akun = data.get('akun')
+        topup_product = data.get('topup_product')
+        game_user_id = data.get('game_user_id')
+        
+        if item_type == 'AKUN':
+            if not akun:
+                raise serializers.ValidationError({'akun': 'Akun harus diisi untuk item type AKUN'})
+            # Check if akun is sold (if akun is an instance)
+            if hasattr(akun, 'is_sold') and akun.is_sold:
+                raise serializers.ValidationError({'akun': 'Akun ini sudah terjual'})
+        elif item_type == 'TOPUP':
+            if not topup_product:
+                raise serializers.ValidationError({'topup_product': 'TopUp Product harus diisi untuk item type TOPUP'})
+            if not game_user_id:
+                raise serializers.ValidationError({'game_user_id': 'Game User ID harus diisi untuk top-up'})
+        
+        return data
+    
+    def create(self, validated_data):
+        """Override create untuk set harga_saat_ditambahkan"""
+        item_type = validated_data.get('item_type')
+        cart = validated_data.get('cart')
+        
+        # Set harga berdasarkan item type
+        if item_type == 'AKUN' and validated_data.get('akun'):
+            validated_data['harga_saat_ditambahkan'] = validated_data['akun'].harga
+        elif item_type == 'TOPUP' and validated_data.get('topup_product'):
+            validated_data['harga_saat_ditambahkan'] = validated_data['topup_product'].harga
+        
+        # Check if item already exists in cart
+        if item_type == 'AKUN':
+            existing_item = CartItem.objects.filter(cart=cart, akun=validated_data.get('akun')).first()
+            if existing_item:
+                # Update quantity instead of creating new
+                existing_item.quantity += validated_data.get('quantity', 1)
+                existing_item.save()
+                return existing_item
+        
+        return super().create(validated_data)
+
+class CartSerializer(serializers.ModelSerializer):
+    """Serializer untuk Cart"""
+    items = CartItemSerializer(many=True, read_only=True)
+    total_price = serializers.SerializerMethodField()
+    item_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Cart
+        fields = ['id', 'user', 'items', 'total_price', 'item_count', 'dibuat_pada', 'diperbarui_pada']
+        read_only_fields = ['user', 'dibuat_pada', 'diperbarui_pada']
+    
+    def get_total_price(self, obj):
+        return float(obj.get_total_price())
+    
+    def get_item_count(self, obj):
+        return obj.get_item_count()

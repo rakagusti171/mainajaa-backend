@@ -30,12 +30,23 @@ urlpatterns = [
     path('validate-coupon-akun/', views.validate_coupon_api, name='validate_coupon_akun'),
     path('validate-coupon-topup/', views.validate_topup_coupon_api, name='validate_coupon_topup'), 
 
+    # === Cart (User) ===
+    path('cart/', views.get_cart, name='get_cart'),
+    path('cart/add/', views.add_to_cart, name='add_to_cart'),
+    path('cart/item/<int:item_id>/', views.update_cart_item, name='update_cart_item'),
+    path('cart/item/<int:item_id>/remove/', views.remove_from_cart, name='remove_from_cart'),
+    path('cart/clear/', views.clear_cart, name='clear_cart'),
+    path('cart/checkout/', views.checkout_from_cart, name='checkout_from_cart'),
+    path('cart/count/', views.get_cart_count, name='get_cart_count'),
+
     # === Pembelian & Riwayat (User) ===
     path('pembelian/create-akun/', views.create_pembelian, name='create_pembelian_akun'),
     path('pembelian/create-topup/', views.create_topup_pembelian, name='create_pembelian_topup'),
     path('pembelian/history/', views.get_pembelian_history, name='pembelian_history'),
     path('pembelian/detail/<str:kode_transaksi>/', views.get_purchase_detail, name='purchase_detail'),
+    path('pembelian/invoice/<str:kode_transaksi>/', views.download_invoice, name='download_invoice'),
     path('pembelian/review/<int:purchase_id>/', views.submit_review, name='submit_review'),
+    path('pembelian/verify-crypto/', views.verify_crypto_payment, name='verify_crypto_payment'),
     path('reviews/<str:game_name>/', views.get_reviews_by_game, name='game_reviews'),
 
     # === Webhook Midtrans ===
