@@ -854,7 +854,22 @@ Tim MainAjaa
         except Exception as e:
             print(f"ERROR: Gagal mengirim email konfirmasi pesanan (pending) ke {user.email}: {e}")
 
-        return Response({'midtrans_token': midtrans_token, 'pembelian_id': pembelian_obj.id})
+        # payment_token bisa berupa midtrans_token atau None (untuk crypto)
+        response_data = {
+            'pembelian_id': pembelian_obj.id,
+            'kode_transaksi': pembelian_obj.kode_transaksi,
+        }
+        
+        if payment_method == 'MIDTRANS' and payment_token:
+            response_data['midtrans_token'] = payment_token
+        elif payment_method.startswith('CRYPTO_'):
+            # Untuk crypto payment, kirim data wallet
+            response_data['crypto_address'] = pembelian_obj.crypto_address
+            response_data['crypto_amount'] = float(pembelian_obj.crypto_amount) if pembelian_obj.crypto_amount else None
+            response_data['crypto_currency'] = pembelian_obj.crypto_currency
+            response_data['harga_total'] = float(pembelian_obj.harga_total)
+        
+        return Response(response_data)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

@@ -185,6 +185,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://mainajaa.vercel.app",
     "https://mainajaa-backend-production.up.railway.app",
     "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://localhost:3000",
 ]
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
