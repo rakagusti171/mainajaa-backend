@@ -60,7 +60,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  
+    'corsheaders.middleware.CorsMiddleware',  # harus paling atas
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -71,7 +71,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-APPEND_SLASH = False
+APPEND_SLASH = True
 ROOT_URLCONF = 'backend.urls'
 
 TEMPLATES = [
@@ -115,7 +115,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # LANGUAGE & TIMEZONE
 # ======================================================
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Jakarta'
 USE_I18N = True
 USE_TZ = True
 
@@ -130,7 +130,7 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # ======================================================
-# CLOUDINARY CONFIG (Production only)
+# CLOUDINARY CONFIG
 # ======================================================
 CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME')
 CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY')
@@ -176,57 +176,35 @@ SIMPLE_JWT = {
 }
 
 # ======================================================
-# CORS & CSRF CONFIG (FINAL FIX)
+# CORS & CSRF CONFIG (FINAL FIX FOR RAILWAY)
 # ======================================================
-# Handle CORS_ALLOW_CREDENTIALS from environment (can be string "True" or boolean)
-CORS_ALLOW_CREDENTIALS_ENV = os.environ.get('CORS_ALLOW_CREDENTIALS', 'True')
-CORS_ALLOW_CREDENTIALS = CORS_ALLOW_CREDENTIALS_ENV.lower() in ('true', '1', 't') if isinstance(CORS_ALLOW_CREDENTIALS_ENV, str) else CORS_ALLOW_CREDENTIALS_ENV
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_ALL_ORIGINS = False
 
-# Get CORS origins from environment variable or use defaults
-CORS_ALLOWED_ORIGINS_STR = os.environ.get('CORS_ALLOWED_ORIGINS', '')
-if CORS_ALLOWED_ORIGINS_STR:
-    # Parse from environment variable (comma-separated)
-    CORS_ALLOWED_ORIGINS = [origin.strip() for origin in CORS_ALLOWED_ORIGINS_STR.split(',') if origin.strip()]
-    # Also add backend domain for internal requests
-    if BACKEND_DOMAIN:
-        backend_origin = BACKEND_DOMAIN.replace('https://', '').replace('http://', '').rstrip('/')
-        backend_full = BACKEND_DOMAIN.rstrip('/')
-        if backend_full not in CORS_ALLOWED_ORIGINS:
-            CORS_ALLOWED_ORIGINS.append(backend_full)
-else:
-    # Default origins
-    CORS_ALLOWED_ORIGINS = [
-        "https://mainajaa.vercel.app",
-        "https://mainajaa-backend-production.up.railway.app",
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "http://localhost:3000",
-    ]
+CORS_ALLOWED_ORIGINS = [
+    "https://mainajaa.vercel.app",
+    "https://mainajaa-backend-production.up.railway.app",
+    "http://127.0.0.1:5173",
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
 
-# Add regex patterns for Vercel deployments
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.vercel\.app$",
     r"^https://.*\.railway\.app$",
 ]
 
-# CSRF trusted origins - get from environment or use CORS_ALLOWED_ORIGINS
-CSRF_TRUSTED_ORIGINS_STR = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
-if CSRF_TRUSTED_ORIGINS_STR:
-    # Parse from environment variable (comma-separated)
-    CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in CSRF_TRUSTED_ORIGINS_STR.split(',') if origin.strip()]
-else:
-    # Use CORS_ALLOWED_ORIGINS as base
-    CSRF_TRUSTED_ORIGINS = list(CORS_ALLOWED_ORIGINS) + [
-        "https://*.vercel.app",
-        "https://*.railway.app",
-    ]
+CSRF_TRUSTED_ORIGINS = [
+    "https://mainajaa.vercel.app",
+    "https://mainajaa-backend-production.up.railway.app",
+    "https://*.vercel.app",
+    "https://*.railway.app",
+]
 
-# Allow all methods
 CORS_ALLOW_METHODS = [
     "DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT",
 ]
 
-# Allow all necessary headers
 CORS_ALLOW_HEADERS = [
     "accept",
     "accept-encoding",
@@ -242,12 +220,9 @@ CORS_ALLOW_HEADERS = [
 
 CORS_PREFLIGHT_MAX_AGE = 86400
 
-# For development, allow all origins if DEBUG is True
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
     CORS_ALLOW_CREDENTIALS = True
-else:
-    CORS_ALLOW_ALL_ORIGINS = False
 
 # ======================================================
 # MIDTRANS & ENCRYPTION
@@ -257,35 +232,31 @@ MIDTRANS_CLIENT_KEY = os.environ.get('MIDTRANS_CLIENT_KEY')
 MIDTRANS_IS_PRODUCTION = os.environ.get('MIDTRANS_IS_PRODUCTION', 'False').lower() in ('true', '1', 't')
 FERNET_KEY = os.environ.get('FERNET_KEY')
 
-# Crypto Payment Wallet Addresses
 USDT_WALLET_ADDRESS = os.environ.get('USDT_WALLET_ADDRESS', '')
 ETH_WALLET_ADDRESS = os.environ.get('ETH_WALLET_ADDRESS', '')
 SOL_WALLET_ADDRESS = os.environ.get('SOL_WALLET_ADDRESS', '')
 
-# Blockchain Explorer API Keys (for automatic verification)
-ETHERSCAN_API_KEY = os.environ.get('ETHERSCAN_API_KEY', 'YourApiKeyToken')  # Get free API key from etherscan.io
-# Note: TronGrid (USDT) doesn't require API keys for basic queries
-# Solana RPC is free but consider using dedicated RPC endpoint for production
-
-# Exchange Rate API (for IDR to USD conversion)
-EXCHANGERATE_API_KEY = os.environ.get('EXCHANGERATE_API_KEY', '')  # Optional: for exchangerate-api.com
+ETHERSCAN_API_KEY = os.environ.get('ETHERSCAN_API_KEY', 'YourApiKeyToken')
 
 # ======================================================
-# EMAIL CONFIG
+# EMAIL CONFIG (SAFE FOR RAILWAY)
 # ======================================================
-EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
-EMAIL_HOST = 'smtp.gmail.com'
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.environ.get('EMAIL_USER')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASSWORD')
-DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'noreply@mainajaa.com'
+if os.environ.get("RAILWAY_ENVIRONMENT"):
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_HOST = 'smtp.gmail.com'
+    EMAIL_PORT = 587
+    EMAIL_USE_TLS = True
+    EMAIL_HOST_USER = os.environ.get('EMAIL_USER')
+    EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASSWORD')
+    DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or 'noreply@mainajaa.com'
 
 # ======================================================
 # SECURITY (PRODUCTION)
 # ======================================================
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = False  # ⚠️ Railway already handles HTTPS
+SECURE_SSL_REDIRECT = False  # Railway udah handle HTTPS
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_BROWSER_XSS_FILTER = True
@@ -296,14 +267,11 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
 
 # ======================================================
-# DEBUG INFO (optional, remove later)
+# DEBUG INFO
 # ======================================================
 print("✅ ALLOWED_HOSTS:", ALLOWED_HOSTS)
 print("✅ CORS_ALLOWED_ORIGINS:", CORS_ALLOWED_ORIGINS)
-try:
-    print("✅ CORS_ALLOW_ALL_ORIGINS:", CORS_ALLOW_ALL_ORIGINS)
-except NameError:
-    print("✅ CORS_ALLOW_ALL_ORIGINS: Not set")
+print("✅ CORS_ALLOW_ALL_ORIGINS:", CORS_ALLOW_ALL_ORIGINS)
 print("✅ CSRF_TRUSTED_ORIGINS:", CSRF_TRUSTED_ORIGINS)
 print("✅ DEBUG:", DEBUG)
 print("✅ CORS_ALLOW_CREDENTIALS:", CORS_ALLOW_CREDENTIALS)
