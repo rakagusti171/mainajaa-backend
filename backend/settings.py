@@ -178,39 +178,76 @@ SIMPLE_JWT = {
 # ======================================================
 # CORS & CSRF CONFIG (FINAL FIX)
 # ======================================================
-CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = False
+# Handle CORS_ALLOW_CREDENTIALS from environment (can be string "True" or boolean)
+CORS_ALLOW_CREDENTIALS_ENV = os.environ.get('CORS_ALLOW_CREDENTIALS', 'True')
+CORS_ALLOW_CREDENTIALS = CORS_ALLOW_CREDENTIALS_ENV.lower() in ('true', '1', 't') if isinstance(CORS_ALLOW_CREDENTIALS_ENV, str) else CORS_ALLOW_CREDENTIALS_ENV
 
-CORS_ALLOWED_ORIGINS = [
-    "https://mainajaa.vercel.app",
-    "https://mainajaa-backend-production.up.railway.app",
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
-    "http://localhost:3000",
-]
+# Get CORS origins from environment variable or use defaults
+CORS_ALLOWED_ORIGINS_STR = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+if CORS_ALLOWED_ORIGINS_STR:
+    # Parse from environment variable (comma-separated)
+    CORS_ALLOWED_ORIGINS = [origin.strip() for origin in CORS_ALLOWED_ORIGINS_STR.split(',') if origin.strip()]
+    # Also add backend domain for internal requests
+    if BACKEND_DOMAIN:
+        backend_origin = BACKEND_DOMAIN.replace('https://', '').replace('http://', '').rstrip('/')
+        backend_full = BACKEND_DOMAIN.rstrip('/')
+        if backend_full not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(backend_full)
+else:
+    # Default origins
+    CORS_ALLOWED_ORIGINS = [
+        "https://mainajaa.vercel.app",
+        "https://mainajaa-backend-production.up.railway.app",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ]
 
+# Add regex patterns for Vercel deployments
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.vercel\.app$",
+    r"^https://.*\.railway\.app$",
 ]
 
-CSRF_TRUSTED_ORIGINS = [
-    "https://mainajaa.vercel.app",
-    "https://mainajaa-backend-production.up.railway.app",
-    "https://*.vercel.app",
-    "http://127.0.0.1:5173",
-]
+# CSRF trusted origins - get from environment or use CORS_ALLOWED_ORIGINS
+CSRF_TRUSTED_ORIGINS_STR = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
+if CSRF_TRUSTED_ORIGINS_STR:
+    # Parse from environment variable (comma-separated)
+    CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in CSRF_TRUSTED_ORIGINS_STR.split(',') if origin.strip()]
+else:
+    # Use CORS_ALLOWED_ORIGINS as base
+    CSRF_TRUSTED_ORIGINS = list(CORS_ALLOWED_ORIGINS) + [
+        "https://*.vercel.app",
+        "https://*.railway.app",
+    ]
 
+# Allow all methods
 CORS_ALLOW_METHODS = [
     "DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT",
 ]
 
+# Allow all necessary headers
 CORS_ALLOW_HEADERS = [
-    "accept", "accept-encoding", "authorization",
-    "content-type", "dnt", "origin", "user-agent",
-    "x-csrftoken", "x-requested-with",
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+    "cache-control",
 ]
 
 CORS_PREFLIGHT_MAX_AGE = 86400
+
+# For development, allow all origins if DEBUG is True
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ALLOW_CREDENTIALS = True
+else:
+    CORS_ALLOW_ALL_ORIGINS = False
 
 # ======================================================
 # MIDTRANS & ENCRYPTION
@@ -263,5 +300,10 @@ SECURE_HSTS_PRELOAD = True
 # ======================================================
 print("✅ ALLOWED_HOSTS:", ALLOWED_HOSTS)
 print("✅ CORS_ALLOWED_ORIGINS:", CORS_ALLOWED_ORIGINS)
+try:
+    print("✅ CORS_ALLOW_ALL_ORIGINS:", CORS_ALLOW_ALL_ORIGINS)
+except NameError:
+    print("✅ CORS_ALLOW_ALL_ORIGINS: Not set")
 print("✅ CSRF_TRUSTED_ORIGINS:", CSRF_TRUSTED_ORIGINS)
 print("✅ DEBUG:", DEBUG)
+print("✅ CORS_ALLOW_CREDENTIALS:", CORS_ALLOW_CREDENTIALS)
