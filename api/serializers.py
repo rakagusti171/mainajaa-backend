@@ -228,9 +228,9 @@ class KuponAdminSerializer(serializers.ModelSerializer):
 class RiwayatAkunSerializer(serializers.ModelSerializer):
     """Serializer ramping untuk daftar riwayat pembelian AKUN."""
     tipe = serializers.SerializerMethodField()
-    nama_item = serializers.ReadOnlyField(source='akun.nama_akun', default='Akun Dihapus')
-    total = serializers.ReadOnlyField(source='harga_total')
-    tanggal = serializers.ReadOnlyField(source='dibuat_pada')
+    nama_item = serializers.SerializerMethodField()
+    total = serializers.SerializerMethodField()
+    tanggal = serializers.SerializerMethodField()
     
     class Meta:
         model = Pembelian
@@ -238,13 +238,24 @@ class RiwayatAkunSerializer(serializers.ModelSerializer):
         
     def get_tipe(self, obj):
         return 'Akun'
+    
+    def get_nama_item(self, obj):
+        return obj.akun.nama_akun if obj.akun else 'Akun Dihapus'
+    
+    def get_total(self, obj):
+        return float(obj.harga_total) if obj.harga_total else 0.0
+    
+    def get_tanggal(self, obj):
+        if obj.dibuat_pada:
+            return obj.dibuat_pada.isoformat()
+        return ''
 
 class RiwayatTopUpSerializer(serializers.ModelSerializer):
     """Serializer ramping untuk daftar riwayat pembelian TOP UP."""
     tipe = serializers.SerializerMethodField()
-    nama_item = serializers.ReadOnlyField(source='produk.nama_paket', default='Produk Dihapus')
-    total = serializers.ReadOnlyField(source='harga_pembelian')
-    tanggal = serializers.ReadOnlyField(source='dibuat_pada') # Menggunakan @property dari model
+    nama_item = serializers.SerializerMethodField()
+    total = serializers.SerializerMethodField()
+    tanggal = serializers.SerializerMethodField()
     
     class Meta:
         model = TopUpPembelian
@@ -252,6 +263,19 @@ class RiwayatTopUpSerializer(serializers.ModelSerializer):
 
     def get_tipe(self, obj):
         return 'TopUp'
+    
+    def get_nama_item(self, obj):
+        return obj.produk.nama_paket if obj.produk else 'Produk Dihapus'
+    
+    def get_total(self, obj):
+        return float(obj.harga_pembelian) if obj.harga_pembelian else 0.0
+    
+    def get_tanggal(self, obj):
+        # Menggunakan property dibuat_pada yang mengembalikan tanggal_pembelian
+        tanggal = obj.dibuat_pada if hasattr(obj, 'dibuat_pada') else obj.tanggal_pembelian
+        if tanggal:
+            return tanggal.isoformat()
+        return ''
 
 class PembelianDetailSerializer(serializers.ModelSerializer):
     """

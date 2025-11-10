@@ -16,6 +16,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils import timezone
 from django.contrib.auth import password_validation
 from django.core.mail import send_mail
 import midtransclient
@@ -936,60 +937,121 @@ def get_pembelian_history(request):
     - Individual pembelian yang dibuat dari cart order juga muncul terpisah
     - User bisa melihat detail cart order untuk melihat semua akun dengan email/password
     """
-    user = request.user
+    try:
+        user = request.user
 
-    # Get individual purchases (termasuk yang dibuat dari cart order)
-    akun_history = Pembelian.objects.filter(pembeli=user)
-    topup_history = TopUpPembelian.objects.filter(pembeli=user)
-    akun_data = RiwayatAkunSerializer(akun_history, many=True).data
-    topup_data = RiwayatTopUpSerializer(topup_history, many=True).data
-    
-    # Tambahkan flag untuk menandai apakah pembelian dari cart order
-    for item in akun_data:
-        # Check if this pembelian is from cart order
-        pembelian_obj = akun_history.filter(id=item.get('id')).first()
-        if pembelian_obj and hasattr(pembelian_obj, 'cart_order_item') and pembelian_obj.cart_order_item.exists():
-            cart_order_item = pembelian_obj.cart_order_item.first()
-            item['from_cart_order'] = cart_order_item.cart_order.kode_transaksi
-            item['cart_order_kode'] = cart_order_item.cart_order.kode_transaksi
-        else:
-            item['from_cart_order'] = None
-            item['cart_order_kode'] = None
-    
-    # Get cart orders (muncul sebagai 1 item untuk setiap cart order)
-    cart_orders = CartOrder.objects.filter(pembeli=user).order_by('-dibuat_pada')
-    cart_data = []
-    for cart_order in cart_orders:
-        # Count hanya akun (cart hanya support AKUN sekarang)
-        akun_count = cart_order.order_items.filter(item_type='AKUN').count()
-        cart_data.append({
-            'id': cart_order.id,
-            'kode_transaksi': cart_order.kode_transaksi,
-            'tipe': 'CART',
-            'nama_item': f'Cart Order ({akun_count} akun)',
-            'total': float(cart_order.harga_total),
-            'status': cart_order.status,
-            'tanggal': cart_order.dibuat_pada.isoformat(),
-            'midtrans_token': cart_order.midtrans_token,
-            'item_count': akun_count,
-            'is_cart_order': True,  # Flag untuk frontend
-        })
-    
-    # Combine semua data
-    combined_history = list(akun_data) + list(topup_data) + list(cart_data)
-    
-    # Sort by tanggal (dibuat_pada untuk akun, tanggal_pembelian untuk topup, dibuat_pada untuk cart)
-    def get_sort_key(item):
-        if item.get('tipe') == 'CART':
-            return item.get('tanggal', '')
-        elif item.get('tipe') == 'topup':
-            return item.get('tanggal_pembelian', item.get('tanggal', ''))
-        else:
-            return item.get('tanggal', item.get('dibuat_pada', ''))
-    
-    combined_history.sort(key=get_sort_key, reverse=True)
-    
-    return Response(combined_history)
+        # Get individual purchases (termasuk yang dibuat dari cart order)
+        akun_history = Pembelian.objects.filter(pembeli=user)
+        topup_history = TopUpPembelian.objects.filter(pembeli=user)
+        
+        # Serialize dengan error handling
+        try:
+            akun_data = RiwayatAkunSerializer(akun_history, many=True).data
+        except Exception as e:
+            print(f"Error serializing akun_history: {e}")
+            import traceback
+            traceback.print_exc()
+            akun_data = []
+        
+        try:
+            topup_data = RiwayatTopUpSerializer(topup_history, many=True).data
+        except Exception as e:
+            print(f"Error serializing topup_history: {e}")
+            import traceback
+            traceback.print_exc()
+            topup_data = []
+        
+        # Tambahkan flag untuk menandai apakah pembelian dari cart order
+        for item in akun_data:
+            try:
+                # Check if this pembelian is from cart order
+                pembelian_id = item.get('id')
+                if pembelian_id:
+                    pembelian_obj = Pembelian.objects.filter(id=pembelian_id, pembeli=user).first()
+                    if pembelian_obj:
+                        # Check if this pembelian has cart_order_item
+                        cart_order_items = CartOrderItem.objects.filter(pembelian_akun=pembelian_obj)
+                        if cart_order_items.exists():
+                            cart_order_item = cart_order_items.first()
+                            if cart_order_item and cart_order_item.cart_order:
+                                item['from_cart_order'] = cart_order_item.cart_order.kode_transaksi
+                                item['cart_order_kode'] = cart_order_item.cart_order.kode_transaksi
+                            else:
+                                item['from_cart_order'] = None
+                                item['cart_order_kode'] = None
+                        else:
+                            item['from_cart_order'] = None
+                            item['cart_order_kode'] = None
+                    else:
+                        item['from_cart_order'] = None
+                        item['cart_order_kode'] = None
+                else:
+                    item['from_cart_order'] = None
+                    item['cart_order_kode'] = None
+            except Exception as e:
+                print(f"Error checking cart_order_item for pembelian {item.get('id')}: {e}")
+                item['from_cart_order'] = None
+                item['cart_order_kode'] = None
+        
+        # Get cart orders (muncul sebagai 1 item untuk setiap cart order)
+        try:
+            cart_orders = CartOrder.objects.filter(pembeli=user).order_by('-dibuat_pada')
+            cart_data = []
+            for cart_order in cart_orders:
+                try:
+                    # Count hanya akun (cart hanya support AKUN sekarang)
+                    akun_count = cart_order.order_items.filter(item_type='AKUN').count()
+                    
+                    # Handle None values
+                    harga_total = float(cart_order.harga_total) if cart_order.harga_total else 0.0
+                    tanggal = cart_order.dibuat_pada.isoformat() if cart_order.dibuat_pada else ''
+                    midtrans_token = cart_order.midtrans_token if cart_order.midtrans_token else None
+                    
+                    cart_data.append({
+                        'id': cart_order.id,
+                        'kode_transaksi': cart_order.kode_transaksi,
+                        'tipe': 'CART',
+                        'nama_item': f'Cart Order ({akun_count} akun)',
+                        'total': harga_total,
+                        'status': cart_order.status,
+                        'tanggal': tanggal,
+                        'midtrans_token': midtrans_token,
+                        'item_count': akun_count,
+                        'is_cart_order': True,  # Flag untuk frontend
+                    })
+                except Exception as e:
+                    print(f"Error processing cart_order {cart_order.id}: {e}")
+                    continue
+        except Exception as e:
+            print(f"Error getting cart_orders: {e}")
+            import traceback
+            traceback.print_exc()
+            cart_data = []
+        
+        # Combine semua data
+        combined_history = list(akun_data) + list(topup_data) + list(cart_data)
+        
+        # Sort by tanggal - semua sudah dalam format ISO string dari serializer
+        def get_sort_key(item):
+            try:
+                # Semua item sudah memiliki 'tanggal' dalam format ISO string
+                tanggal = item.get('tanggal', '')
+                # Pastikan selalu return string untuk sorting
+                return str(tanggal) if tanggal else ''
+            except Exception as e:
+                print(f"Error in get_sort_key for item {item.get('id')}: {e}")
+                return ''
+        
+        # Sort by tanggal (terbaru pertama)
+        combined_history.sort(key=get_sort_key, reverse=True)
+        
+        return Response(combined_history)
+        
+    except Exception as e:
+        print(f"Error in get_pembelian_history: {e}")
+        import traceback
+        traceback.print_exc()
+        return Response({'error': f'Terjadi kesalahan saat mengambil riwayat pembelian: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @csrf_exempt
 @api_view(['POST'])

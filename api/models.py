@@ -200,7 +200,7 @@ class TopUpPembelian(models.Model):
 
     @property
     def dibuat_pada(self):
-        return self.tanggal_pbembelian
+        return self.tanggal_pembelian
 
     @classmethod
     def create_pembelian_topup(cls, pembeli, produk, game_user_id, game_zone_id=None, kode_kupon_str=None):
